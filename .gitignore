@@ -17,3 +17,13 @@ Thumbs.db
 # Go binaries
 go-server/go-server
 go-client/go-client
+
+# Backups
+*.bak
+
+# Working memory
+.working_memory.md
+
+# ACME account keys
+client-data/acme-account-key.pem
+client-data/password

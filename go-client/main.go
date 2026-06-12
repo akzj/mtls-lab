@@ -2,16 +2,19 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,7 +26,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/acme"
 )
 
 var (
@@ -31,7 +34,7 @@ var (
 	deviceMu   sync.RWMutex
 	acmeCert   = "/app/data/acme-client.crt"
 	acmeKey    = "/app/data/acme-client-key.pem"
-	acmePwd    = "/app/data/password"
+	acmeAcctKey = "/app/data/acme-account-key.pem"
 	rootCA     = "/app/certs/root-ca.crt"
 	caChain    = "/app/certs/ca-chain.crt"
 	trustChain = "/app/certs/trust-chain.crt"
@@ -45,7 +48,21 @@ func main() {
 	if err := acmeBoot(); err != nil {
 		log.Fatalf("ACME boot failed: %v", err)
 	}
-	log.Println("✅ ACME certificate obtained")
+
+	// Start ACME certificate auto-renewal goroutine (checks daily, renews at 7d threshold)
+	go func() {
+		// Create ACME client from saved account key for renewal
+		renewClient, err := newACMEClient()
+		if err != nil {
+			log.Printf("Renewal: cannot initialize ACME client: %v", err)
+			return
+		}
+		// Renewal goroutine also needs the cert key — loaded from disk each time
+		log.Println("  Auto-renewal background worker started (check interval: 24h, threshold: 7d)")
+		autoRenewCert(context.Background(), renewClient)
+	}()
+
+		log.Println("✅ ACME certificate obtained")
 
 	// Step 2: Register with go-server (direct mTLS, bypassing nginx,
 	// so go-server sees the ACME client cert CN, not nginx-proxy's CN)
@@ -55,9 +72,13 @@ func main() {
 	}
 	log.Printf("✅ Registered as device: %s", getDeviceID())
 
-	// Step 3: Start SSH server for remote access (goroutine)
-	log.Println("[3/5] Starting SSH server on :2222...")
-	go startSSHServer()
+	// Step 3: Configure and start system OpenSSH daemon
+	log.Println("[3/5] Configuring system OpenSSH daemon...")
+	if err := configureSSHD(); err != nil {
+		log.Printf("⚠️ SSHD configuration failed: %v", err)
+	} else {
+		log.Println("✅ OpenSSH daemon started on port 22")
+	}
 
 	// Step 4: Start heartbeat loop (goroutine)
 	log.Println("[4/5] Starting heartbeat loop (30s interval)...")
@@ -97,6 +118,10 @@ func setDeviceID(id string) {
 
 // acmeBoot runs `step ca certificate` to obtain a client cert from step-ca ACME.
 // Step CLI generates its own key pair and handles the HTTP-01 challenge.
+// acmeBoot obtains a client certificate from step-ca using the ACME protocol.
+// Uses golang.org/x/crypto/acme (no external step binary dependency).
+// HTTP-01 challenge: starts a temp HTTP server on port 80, step-ca validates
+// by connecting to http://go-client:80/.well-known/acme-challenge/<token>.
 func acmeBoot() error {
 	// Ensure data directory exists
 	dataDir := filepath.Dir(acmeCert)
@@ -104,56 +129,383 @@ func acmeBoot() error {
 		return fmt.Errorf("mkdir %s: %w", dataDir, err)
 	}
 
-	// Remove any stale cert/key from previous failed runs to avoid mismatches
+	// Remove any stale cert/key from previous failed runs
 	os.Remove(acmeCert)
 	os.Remove(acmeKey)
+	os.Remove(acmeAcctKey)
 
-	// Create a password file for step CLI private key encryption.
-	// Without this, step CLI tries to prompt on /dev/tty (not available in Docker).
-	if err := os.WriteFile(acmePwd, []byte("zero-fas-lab\n"), 0600); err != nil {
-		return fmt.Errorf("write password file: %w", err)
-	}
+	ctx := context.Background()
 
-	// Run `step ca certificate` — ACME boot with step-ca.
-	// Step CLI auto-selects HTTP-01 challenge in this environment:
-	// it listens on port 80, step-ca connects back to verify.
-	// In Docker Compose, go-client is reachable from step-ca on any port
-	// via the shared Docker network.
-	cmd := exec.Command("step",
-		"ca", "certificate",
-		"go-client",           // subject (DNS name)
-		acmeCert,              // output cert file
-		acmeKey,               // output key file
-		"--provisioner", "acme",
-		"--ca-url", "https://step-ca:8443",
-		"--root", rootCA,
-		"--not-after", "720h",
-		"--password-file", acmePwd,
-	)
-
-	output, err := cmd.CombinedOutput()
-	log.Printf("step ca certificate output: %s", strings.TrimSpace(string(output)))
-
+	// Generate ECDSA P-256 account key (standard for ACME)
+	log.Println("  Generating ACME account key (ECDSA P-256)...")
+	accountKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		// step CLI sometimes exits non-zero after successful cert issuance
-		// (e.g. TTY prompt failure in Docker). Check if cert was actually written.
-		if _, statErr := os.Stat(acmeCert); os.IsNotExist(statErr) {
-			return fmt.Errorf("ACME boot failed: %w (cert not found)", err)
-		}
-		log.Printf("⚠️ step CLI exited with error but cert was written — proceeding")
+		return fmt.Errorf("account key: %w", err)
 	}
 
-	// Verify the cert was written and matches the key
-	if _, err := os.Stat(acmeCert); os.IsNotExist(err) {
-		return fmt.Errorf("ACME cert was not written to %s", acmeCert)
+	// TLS config for ACME server connection.
+	// step-ca serves TLS with intermediate.crt signed by root-ca.crt.
+	caCertPEM, err := os.ReadFile(rootCA)
+	if err != nil {
+		return fmt.Errorf("read root CA: %w", err)
 	}
-	if _, err := os.Stat(acmeKey); os.IsNotExist(err) {
-		return fmt.Errorf("ACME key was not written to %s", acmeKey)
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caCertPEM) {
+		return fmt.Errorf("failed to parse root CA PEM")
+	}
+	acmeTLSConfig := &tls.Config{
+		RootCAs:    caPool,
+		ServerName: "step-ca",
+		MinVersion: tls.VersionTLS12,
+	}
+
+	acmeHTTPClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: acmeTLSConfig,
+		},
+	}
+
+	// Create ACME client
+	client := &acme.Client{
+		DirectoryURL: "https://step-ca:8443/acme/acme/directory",
+		UserAgent:    "zero-fas-go-client/1.0",
+		HTTPClient:   acmeHTTPClient,
+		Key:          accountKey,
+	}
+
+	// Register ACME account
+	log.Println("  Registering ACME account...")
+	acct := &acme.Account{}
+	acct, err = client.Register(ctx, acct, acme.AcceptTOS)
+	if err != nil {
+		if ae, ok := err.(*acme.Error); ok && ae.StatusCode == http.StatusConflict {
+			log.Println("  Account already exists, continuing...")
+		} else {
+			return fmt.Errorf("ACME register: %w", err)
+		}
+	} else {
+		log.Printf("  Account registered: %s", acct.URI)
+	}
+
+	// Save account key to disk for renewal
+	if err := saveECKey(acmeAcctKey, accountKey); err != nil {
+		return fmt.Errorf("save account key: %w", err)
+	}
+	log.Println("  Account key saved")
+
+	// Generate certificate key (RSA 2048)
+	log.Println("  Generating certificate key (RSA 2048)...")
+	certKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return fmt.Errorf("cert key: %w", err)
+	}
+
+	// Save private key before ACME flow
+	if err := savePrivateKey(acmeKey, certKey); err != nil {
+		return fmt.Errorf("save key: %w", err)
+	}
+
+	// Create order for "go-client" identifier
+	log.Println("  Creating ACME order...")
+	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs("go-client"))
+	if err != nil {
+		return fmt.Errorf("ACME order: %w", err)
+	}
+	log.Printf("  Order created: %s", order.URI)
+
+	// Complete all authorizations (HTTP-01 challenge)
+	for _, authzURL := range order.AuthzURLs {
+		if err := completeHTTP01Challenge(ctx, client, authzURL); err != nil {
+			return fmt.Errorf("challenge for %s: %w", authzURL, err)
+		}
+	}
+
+	// Generate CSR
+	log.Println("  Generating CSR...")
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{
+			CommonName: "go-client",
+		},
+	}, certKey)
+	if err != nil {
+		return fmt.Errorf("CSR: %w", err)
+	}
+
+	// Finalize order and get certificate
+	log.Println("  Finalizing order...")
+	certDER, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csrDER, true)
+	if err != nil {
+		return fmt.Errorf("create cert: %w", err)
+	}
+
+	// Save certificate (first element is the leaf, rest is chain)
+	if len(certDER) > 0 {
+		var certPEMBuf bytes.Buffer
+		for _, der := range certDER {
+			pem.Encode(&certPEMBuf, &pem.Block{Type: "CERTIFICATE", Bytes: der})
+		}
+		if err := os.WriteFile(acmeCert, certPEMBuf.Bytes(), 0644); err != nil {
+			return fmt.Errorf("save cert: %w", err)
+		}
+		log.Printf("  Certificate saved to %s (%d bytes)", acmeCert, certPEMBuf.Len())
 	}
 
 	return nil
 }
 
+// completeHTTP01Challenge completes an HTTP-01 ACME authorization challenge.
+// Starts a temporary HTTP server on port 80 that serves the challenge token.
+func completeHTTP01Challenge(ctx context.Context, client *acme.Client, authzURL string) error {
+	authz, err := client.GetAuthorization(ctx, authzURL)
+	if err != nil {
+		return fmt.Errorf("get authz: %w", err)
+	}
+	log.Printf("  Authorization for %s (%s)", authz.Identifier.Value, authz.Identifier.Type)
+
+	// Find HTTP-01 challenge
+	var chal *acme.Challenge
+	for _, c := range authz.Challenges {
+		if c.Type == "http-01" {
+			chal = c
+			break
+		}
+	}
+	if chal == nil {
+		return fmt.Errorf("no http-01 challenge for %s", authz.Identifier.Value)
+	}
+
+	// Get challenge response token
+	respToken, err := client.HTTP01ChallengeResponse(chal.Token)
+	if err != nil {
+		return fmt.Errorf("challenge response: %w", err)
+	}
+
+	// Start temporary HTTP server for challenge
+	challengePath := client.HTTP01ChallengePath(chal.Token)
+	log.Printf("  Serving HTTP-01 challenge at %s", challengePath)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(challengePath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write([]byte(respToken))
+	})
+
+	server := &http.Server{Addr: ":80", Handler: mux}
+	go server.ListenAndServe()
+	time.Sleep(100 * time.Millisecond)
+	defer server.Close()
+
+	// Accept the challenge
+	log.Println("  Accepting HTTP-01 challenge...")
+	if _, err := client.Accept(ctx, chal); err != nil {
+		return fmt.Errorf("accept challenge: %w", err)
+	}
+
+	// Wait for authorization
+	log.Println("  Waiting for step-ca to validate...")
+	if _, err := client.WaitAuthorization(ctx, authzURL); err != nil {
+		return fmt.Errorf("wait authz: %w", err)
+	}
+	log.Println("  Challenge validated!")
+
+	return nil
+}
+
+// savePrivateKey saves an RSA private key to the given path in PEM format.
+func savePrivateKey(path string, key *rsa.PrivateKey) error {
+	pemBlock := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}
+	return os.WriteFile(path, pem.EncodeToMemory(pemBlock), 0600)
+}
+
+// saveECKey saves an ECDSA private key to the given path in PEM format.
+func saveECKey(path string, key *ecdsa.PrivateKey) error {
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return fmt.Errorf("marshal EC key: %w", err)
+	}
+	pemBlock := &pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: der,
+	}
+	return os.WriteFile(path, pem.EncodeToMemory(pemBlock), 0600)
+}
+
+// loadECKey loads an ECDSA private key from a PEM file.
+func loadECKey(path string) (*ecdsa.PrivateKey, error) {
+	pemData, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read key file: %w", err)
+	}
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM data in %s", path)
+	}
+	return x509.ParseECPrivateKey(block.Bytes)
+}
+
+// newACMEClient creates a new ACME client from the saved account key on disk.
+func newACMEClient() (*acme.Client, error) {
+	// Load the saved account key
+	acctKey, err := loadECKey(acmeAcctKey)
+	if err != nil {
+		return nil, fmt.Errorf("load account key: %w", err)
+	}
+
+	// TLS config for step-ca
+	caCertPEM, err := os.ReadFile(rootCA)
+	if err != nil {
+		return nil, fmt.Errorf("read root CA: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caCertPEM) {
+		return nil, fmt.Errorf("failed to parse root CA PEM")
+	}
+
+	acmeHTTPClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    caPool,
+				ServerName: "step-ca",
+				MinVersion: tls.VersionTLS12,
+			},
+		},
+	}
+
+	return &acme.Client{
+		DirectoryURL: "https://step-ca:8443/acme/acme/directory",
+		UserAgent:    "zero-fas-go-client/1.0",
+		HTTPClient:   acmeHTTPClient,
+		Key:          acctKey,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ACME Auto-Renewal
+// ---------------------------------------------------------------------------
+
+// autoRenewCert runs in a goroutine, checking certificate expiration daily.
+// If the remaining lifetime drops below 7 days, it renews via ACME.
+func autoRenewCert(ctx context.Context, client *acme.Client) {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		// Read current certificate
+		certPEM, err := os.ReadFile(acmeCert)
+		if err != nil {
+			log.Printf("Renewal: cannot read cert: %v", err)
+			continue
+		}
+
+		block, _ := pem.Decode(certPEM)
+		if block == nil {
+			log.Printf("Renewal: cannot parse cert PEM")
+			continue
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			log.Printf("Renewal: cannot parse cert: %v", err)
+			continue
+		}
+
+		// Check if certificate expires within 7 days
+		remaining := time.Until(cert.NotAfter)
+		renewThreshold := 7 * 24 * time.Hour
+
+		if remaining > renewThreshold {
+			log.Printf("Renewal: cert expires in %v (threshold: %v), no action needed",
+				roundDuration(remaining), roundDuration(renewThreshold))
+			continue
+		}
+
+		log.Printf("Renewal: cert expires in %v — starting renewal...", roundDuration(remaining))
+
+		// Load the certificate key
+		keyPEM, err := os.ReadFile(acmeKey)
+		if err != nil {
+			log.Printf("Renewal: cannot read key: %v", err)
+			continue
+		}
+		keyBlock, _ := pem.Decode(keyPEM)
+		if keyBlock == nil {
+			log.Printf("Renewal: cannot parse key PEM")
+			continue
+		}
+		certKey, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+		if err != nil {
+			log.Printf("Renewal: cannot parse key: %v", err)
+			continue
+		}
+
+		// Generate new CSR
+		csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+			Subject: pkix.Name{CommonName: "go-client"},
+		}, certKey)
+		if err != nil {
+			log.Printf("Renewal: CSR failed: %v", err)
+			continue
+		}
+
+		// Create new order and complete challenges
+		certDER, err := renewCertificate(ctx, client, csrDER)
+		if err != nil {
+			log.Printf("Renewal failed: %v", err)
+			continue
+		}
+
+		// Save renewed certificate
+		var certPEMBuf bytes.Buffer
+		pem.Encode(&certPEMBuf, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+		if err := os.WriteFile(acmeCert, certPEMBuf.Bytes(), 0644); err != nil {
+			log.Printf("Renewal: save cert failed: %v", err)
+			continue
+		}
+
+		log.Printf("✅ Certificate renewed successfully (expires: %s)",
+			time.Now().Add(720*time.Hour).Format(time.RFC3339))
+	}
+}
+
+// renewCertificate creates a new ACME order and completes the HTTP-01 challenge
+// to obtain a renewed certificate.
+func renewCertificate(ctx context.Context, client *acme.Client, csrDER []byte) ([]byte, error) {
+	// Create a new order
+	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs("go-client"))
+	if err != nil {
+		return nil, fmt.Errorf("renewal order: %w", err)
+	}
+
+	// Complete all authorizations
+	for _, authzURL := range order.AuthzURLs {
+		if err := completeHTTP01Challenge(ctx, client, authzURL); err != nil {
+			return nil, fmt.Errorf("renewal challenge: %w", err)
+		}
+	}
+
+	// Finalize and get cert
+	certDER, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csrDER, true)
+	if err != nil {
+		return nil, fmt.Errorf("renewal finalize: %w", err)
+	}
+
+	if len(certDER) == 0 {
+		return nil, fmt.Errorf("renewal: empty cert bundle")
+	}
+
+	return certDER[0], nil
+}
+
+// roundDuration rounds a duration to the nearest hour for display.
+func roundDuration(d time.Duration) time.Duration {
+	return d.Round(time.Hour)
+}
 // ---------------------------------------------------------------------------
 // Phase 2: Device registration (direct mTLS to go-server:9090)
 // ---------------------------------------------------------------------------
@@ -243,155 +595,83 @@ func registerDevice() error {
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// Phase 3: SSH server (for remote access via Web UI)
-// ---------------------------------------------------------------------------
-
-// startSSHServer starts an SSH server on port 2222.
-// The go-server connects to this SSH server when the user clicks "SSH"
-// on a registered device in the Web UI.
-func startSSHServer() {
-	// Generate ephemeral host key
-	hostKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		log.Printf("SSH host key generation failed: %v", err)
-		return
-	}
-
-	hostKeyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(hostKey),
-	})
-
-	signer, err := ssh.ParsePrivateKey(hostKeyPEM)
-	if err != nil {
-		log.Printf("SSH signer parse error: %v", err)
-		return
-	}
-
-	config := &ssh.ServerConfig{
-		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			return nil, fmt.Errorf("password authentication not allowed")
-		},
-		PublicKeyCallback: func(c ssh.ConnMetadata, pubKey ssh.PublicKey) (*ssh.Permissions, error) {
-			// Lab mode: accept any public key for SSH access
-			// Production: verify against the SSH CA's public key (TrustedUserCAKeys)
-			log.Printf("SSH public key auth from %s (key type: %s)", c.User(), pubKey.Type())
-			return &ssh.Permissions{
-				Extensions: map[string]string{
-					"permit-agent-forwarding":  "",
-					"permit-port-forwarding":   "",
-					"permit-pty":               "",
-					"permit-user-rc":           "",
-				},
-			}, nil
-		},
-	}
-	config.AddHostKey(signer)
-
-	listener, err := net.Listen("tcp", ":2222")
-	if err != nil {
-		log.Printf("SSH listen error: %v", err)
-		return
-	}
-	defer listener.Close()
-
-	log.Printf("SSH server listening on :2222")
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("SSH accept error: %v", err)
-			continue
-		}
-
-		go handleSSHConn(conn, config)
-	}
-}
-
-// handleSSHConn handles an incoming SSH connection
-func handleSSHConn(conn net.Conn, config *ssh.ServerConfig) {
-	defer conn.Close()
-
-	srvConn, chans, reqs, err := ssh.NewServerConn(conn, config)
-	if err != nil {
-		log.Printf("SSH handshake failed: %v", err)
-		return
-	}
-	defer srvConn.Close()
-	log.Printf("SSH connection from %s (%s)", srvConn.RemoteAddr(), srvConn.User())
-
-	go ssh.DiscardRequests(reqs)
-
-	for newChan := range chans {
-		if newChan.ChannelType() != "session" {
-			newChan.Reject(ssh.UnknownChannelType, "unknown channel type")
-			continue
-		}
-
-		channel, requests, err := newChan.Accept()
-		if err != nil {
-			log.Printf("SSH channel accept error: %v", err)
-			continue
-		}
-
-		go handleSSHChannel(channel, requests)
-	}
-}
-
-// handleSSHChannel handles a session channel on the SSH connection
-func handleSSHChannel(channel ssh.Channel, requests <-chan *ssh.Request) {
-	defer channel.Close()
-
-	for req := range requests {
-		switch req.Type {
-		case "exec":
-			var payload struct {
-				Command string
-			}
-			if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
-				channel.Write([]byte(fmt.Sprintf("Error parsing command: %v\n", err)))
-				channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
-				return
-			}
-			log.Printf("SSH exec: %s", payload.Command)
-			channel.Write([]byte(fmt.Sprintf("Hello from go-client device %s\n", getDeviceID())))
-			channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
-			return
-
-		case "shell":
-			log.Printf("SSH shell requested")
-			channel.Write([]byte(fmt.Sprintf("Welcome to go-client device %s\n", getDeviceID())))
-			channel.Write([]byte("$ "))
-			// In a real setup, forward stdin/stdout to a shell.
-			// For the lab, just display the welcome banner and close.
-			channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
-			return
-
-		case "pty-req":
-			// Accept PTY requests silently
-			if req.WantReply {
-				req.Reply(true, nil)
-			}
-
-		case "window-change":
-			if req.WantReply {
-				req.Reply(true, nil)
-			}
-
-		default:
-			if req.WantReply {
-				req.Reply(false, nil)
-			}
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Phase 4: Heartbeat loop
 // ---------------------------------------------------------------------------
 
-// heartbeatLoop sends heartbeat to go-server every 30 seconds.
+// ---------------------------------------------------------------------------
+// Phase 3: System OpenSSH daemon (for remote access via Web UI)
+// ---------------------------------------------------------------------------
+
+// configureSSHD configures and starts the system OpenSSH daemon.
+// Replaces the custom Go SSH server with a production-grade SSH daemon.
+func configureSSHD() error {
+	// Ensure SSH CA public key is in place (saved by registerDevice)
+	caKeyPath := "/etc/ssh/ca.pub"
+	if _, err := os.Stat(caKeyPath); os.IsNotExist(err) {
+		log.Printf("⚠️ SSH CA key not found at %s — generating host keys only", caKeyPath)
+	}
+
+	// Generate host keys if not present (default Alpine sshd needs them)
+	if err := exec.Command("ssh-keygen", "-A").Run(); err != nil {
+		return fmt.Errorf("ssh-keygen -A: %w", err)
+	}
+	log.Printf("SSH host keys generated")
+
+	// Update sshd_config to trust the SSH CA and disable password auth
+	configPath := "/etc/ssh/sshd_config"
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", configPath, err)
+	}
+
+	lines := strings.Split(string(config), "\n")
+	var newLines []string
+	hadTrustedCA := false
+	hadPasswordAuth := false
+	hadPubkeyAuth := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "TrustedUserCAKeys") {
+			newLines = append(newLines, "TrustedUserCAKeys /etc/ssh/ca.pub")
+			hadTrustedCA = true
+		} else if strings.HasPrefix(trimmed, "PasswordAuthentication") {
+			newLines = append(newLines, "PasswordAuthentication no")
+			hadPasswordAuth = true
+		} else if strings.HasPrefix(trimmed, "PubkeyAuthentication") {
+			newLines = append(newLines, "PubkeyAuthentication yes")
+			hadPubkeyAuth = true
+		} else {
+			newLines = append(newLines, line)
+		}
+	}
+
+	if !hadTrustedCA {
+		newLines = append(newLines, "TrustedUserCAKeys /etc/ssh/ca.pub")
+	}
+	if !hadPasswordAuth {
+		newLines = append(newLines, "PasswordAuthentication no")
+	}
+	if !hadPubkeyAuth {
+		newLines = append(newLines, "PubkeyAuthentication yes")
+	}
+
+	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
+		return fmt.Errorf("write %s: %w", configPath, err)
+	}
+	log.Printf("SSHD config updated: TrustedUserCAKeys, PasswordAuthentication no")
+
+	// Start sshd (must use exec, not the init system — Alpine doesn't have one by default)
+	cmd := exec.Command("/usr/sbin/sshd")
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start sshd: %w", err)
+	}
+	log.Printf("OpenSSH daemon started (pid: %d)", cmd.Process.Pid)
+
+	return nil
+}
+
+// ---------------------------------------------------------------------------// heartbeatLoop sends heartbeat to go-server every 30 seconds.
 // Uses HTTP (not mTLS) because go-server:9091 is the HTTP (non-mTLS) port.
 func heartbeatLoop() {
 	ticker := time.NewTicker(30 * time.Second)

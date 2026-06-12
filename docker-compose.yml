@@ -24,6 +24,9 @@ services:
     command: server -dev-tls -config=/vault/config/vault.hcl
     ports:
       - "8200:8200"
+      
+    extra_hosts:
+      - "auth.local:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "vault status -tls-skip-verify 2>&1; test $$? -le 2"]
       interval: 5s
@@ -175,7 +178,126 @@ services:
     container_name: internal-app
     restart: unless-stopped
 
+  # ──────────────────────────────────────────────
+  # PostgreSQL — Authentik database
+  # ──────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: authentik-postgres
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: authentik
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ──────────────────────────────────────────────
+  # Redis — Authentik cache/queue
+  # ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: authentik-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ──────────────────────────────────────────────
+  # Authentik Server — OIDC identity provider
+  # ──────────────────────────────────────────────
+  authentik-server:
+    image: ghcr.io/goauthentik/server:latest
+    container_name: authentik-server
+    command: server
+    ports:
+      - "9000:9000"
+    environment:
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: authentik
+      AUTHENTIK_SECRET_KEY: authentik-lab-secret-key
+      AUTHENTIK_TOKEN_LENGTH: "32"
+      AUTHENTIK_BOOTSTRAP_TOKEN: authentik-bootstrap-token
+      AUTHENTIK_BOOTSTRAP_EMAIL: admin@zero-fas.local
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+      - authentik-custom-templates:/templates/custom
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # Authentik Worker — background tasks
+  # ──────────────────────────────────────────────
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:latest
+    container_name: authentik-worker
+    command: worker
+    environment:
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: authentik
+      AUTHENTIK_SECRET_KEY: authentik-lab-secret-key
+      AUTHENTIK_TOKEN_LENGTH: "32"
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+      - authentik-custom-templates:/templates/custom
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────
+  # Vault OIDC Init — Configure OIDC after Authentik is ready
+  # ──────────────────────────────────────────────
+  vault-oidc-init:
+    image: hashicorp/vault:latest
+    container_name: vault-oidc-init
+    user: "0"
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./vault/policies:/vault/policies:ro
+    environment:
+      - VAULT_ADDR=https://vault:8200
+      - VAULT_TOKEN=root-token
+      - VAULT_SKIP_VERIFY=true
+      - AUTHENTIK_BOOTSTRAP_TOKEN=authentik-bootstrap-token
+    depends_on:
+      vault:
+        condition: service_healthy
+      authentik-server:
+        condition: service_started
+    command: /bin/sh -c "
+      apk add --no-cache jq >/dev/null 2>&1 &&
+      /scripts/06-init-authentik.sh &&
+      /scripts/07-init-vault-oidc.sh
+      "
+    restart: "no"
+
 volumes:
   ssh-ca-pub:
   ssh-ca-dc2-pub:
+  postgres-data:
+  authentik-media:
+  authentik-templates:
+  authentik-custom-templates:
   step-ca-db:
