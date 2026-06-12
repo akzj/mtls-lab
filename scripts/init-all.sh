@@ -51,6 +51,12 @@ terraform apply -auto-approve \
   -var="policies_dir=$PROJECT_DIR/vault/policies" 2>&1 || true
 echo "  Terraform apply complete ✅"
 
+# OIDC CLI fallback (if Terraform OIDC step failed due to timing)
+VAULT_ADDR=https://localhost:8200 VAULT_SKIP_VERIFY=true vault write auth/oidc/config   oidc_discovery_url=http://auth.local:9000/application/o/vault/   oidc_client_id=vault-client-id   oidc_client_secret=vault-client-secret   default_role=dev 2>/dev/null && echo "  OIDC config set ✅" || true
+for role in admin ops dev; do
+  VAULT_ADDR=https://localhost:8200 VAULT_SKIP_VERIFY=true vault write auth/oidc/role/$role     allowed_redirect_uris="http://localhost:8200/oidc/callback,https://localhost:8200/oidc/callback,http://localhost:8200/ui/vault/auth/oidc/oidc/callback,https://localhost:8200/ui/vault/auth/oidc/oidc/callback,http://localhost:8200/v1/auth/oidc/oidc/callback,https://localhost:8200/v1/auth/oidc/oidc/callback"     bound_audiences=vault-client-id     user_claim=sub     oidc_scopes=openid     policies=${role}-policy 2>/dev/null && echo "  Role '${role}' created ✅" || true
+done
+
 echo "Creating userpass users for multi-user demo..."
 for user_info in "admin admin123 admin-policy" "ops ops123 ops-policy" "dev dev123 dev-policy"; do
   read -r user pass policy <<< "$user_info"
