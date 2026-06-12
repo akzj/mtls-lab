@@ -27,6 +27,15 @@ cd "$PROJECT_DIR/terraform"
 export VAULT_ADDR=https://localhost:8200
 export VAULT_TOKEN=root-token
 export VAULT_SKIP_VERIFY=true
+
+# Wait for OIDC discovery URL (needed by Terraform vault_jwt_auth_backend)
+echo "  Waiting for OIDC discovery URL..."
+for i in $(seq 1 30); do
+  curl -s --max-time 3 "http://auth.local:9000/application/o/vault/.well-known/openid-configuration" 2>/dev/null | grep -q "issuer" && echo "  Discovery URL ready ✅" && break
+  sleep 2
+done
+
+export VAULT_SKIP_VERIFY=true
 terraform init -upgrade >/dev/null 2>&1
 
 # Import existing resources to avoid "already exists" errors
