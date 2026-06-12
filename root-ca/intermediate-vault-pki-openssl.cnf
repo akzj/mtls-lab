@@ -1,0 +1,31 @@
+# OpenSSL configuration for Vault PKI Intermediate CSR
+# This intermediate CA will be used by HashiCorp Vault for issuing
+# leaf certificates
+#
+# Usage:
+#   openssl req -new -newkey rsa:2048 -nodes \
+#     -keyout vault/config/intermediate-ca.key \
+#     -out vault/config/intermediate-ca.csr \
+#     -config root-ca/intermediate-vault-pki-openssl.cnf
+
+[req]
+distinguished_name = req_dn
+prompt = no
+req_extensions = vault_pki_req_extensions
+x509_extensions = vault_pki_extensions
+
+[req_dn]
+CN = Zero-FAS Vault PKI Intermediate
+O = Zero-FAS Lab
+OU = PKI
+
+[vault_pki_req_extensions]
+basicConstraints = critical,CA:TRUE,pathlen:0
+keyUsage = critical,digitalSignature,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+
+[vault_pki_extensions]
+basicConstraints = critical,CA:TRUE,pathlen:0
+keyUsage = critical,digitalSignature,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer

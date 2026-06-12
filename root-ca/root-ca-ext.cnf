@@ -1,0 +1,16 @@
+# OpenSSL configuration for Root CA certificate extensions only
+# (No provider config — for general OpenSSL use)
+
+[req]
+distinguished_name = req_dn
+prompt = no
+x509_extensions = root_ca_extensions
+
+[req_dn]
+CN = Zero-FAS Root CA
+
+[root_ca_extensions]
+basicConstraints = critical,CA:TRUE,pathlen:1
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer

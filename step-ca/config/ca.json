@@ -1,0 +1,36 @@
+{
+  "root": "/home/step/certs/root.crt",
+  "federatedRoots": [],
+  "crt": "/home/step/certs/intermediate.crt",
+  "key": "/home/step/secrets/intermediate-key",
+  "address": ":8443",
+  "dnsNames": ["step-ca", "localhost"],
+  "logger": {"format": "text"},
+  "db": {
+    "type": "badgerv2",
+    "dataSource": "/home/step/db"
+  },
+  "authority": {
+    "enableAdmin": false,
+    "provisioners": [
+      {
+        "type": "ACME",
+        "name": "acme",
+        "forceCN": true,
+        "claims": {
+          "maxTLSCertDuration": "720h",
+          "defaultTLSCertDuration": "720h"
+        }
+      }
+    ]
+  },
+  "tls": {
+    "cipherSuites": [
+      "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+      "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+      "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+    ],
+    "minVersion": 1.2
+  }
+}

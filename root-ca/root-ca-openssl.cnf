@@ -1,0 +1,29 @@
+# OpenSSL configuration for Root CA self-signed certificate
+# Uses pkcs11prov (OpenSSL 3.x provider) to access YubiKey PIV slot 9C
+
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_section
+
+[provider_section]
+pkcs11prov = pkcs11prov_section
+
+[pkcs11prov_section]
+module = /opt/homebrew/Cellar/libp11/0.4.18/lib/ossl-modules/pkcs11prov.dylib
+pkcs11_module = /opt/homebrew/lib/libykcs11.dylib
+activate = 1
+
+[req]
+distinguished_name = req_dn
+prompt = no
+x509_extensions = root_ca_extensions
+
+[req_dn]
+CN = Zero-FAS Root CA
+
+[root_ca_extensions]
+basicConstraints = critical,CA:TRUE,pathlen:1
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer

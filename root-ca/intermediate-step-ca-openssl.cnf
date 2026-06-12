@@ -1,0 +1,30 @@
+# OpenSSL configuration for Step CA Intermediate CSR
+# This intermediate CA will be signed by the Root CA on YubiKey
+#
+# Usage:
+#   openssl req -new -newkey rsa:2048 -nodes \
+#     -keyout step-ca/config/intermediate-ca.key \
+#     -out step-ca/config/intermediate-ca.csr \
+#     -config root-ca/intermediate-step-ca-openssl.cnf
+
+[req]
+distinguished_name = req_dn
+prompt = no
+req_extensions = step_ca_req_extensions
+x509_extensions = step_ca_extensions
+
+[req_dn]
+CN = Zero-FAS Step CA Intermediate
+O = Zero-FAS Lab
+OU = PKI
+
+[step_ca_req_extensions]
+basicConstraints = critical,CA:TRUE,pathlen:0
+keyUsage = critical,digitalSignature,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+
+[step_ca_extensions]
+basicConstraints = critical,CA:TRUE,pathlen:0
+keyUsage = critical,digitalSignature,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
