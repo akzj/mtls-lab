@@ -55,8 +55,40 @@ services:
       vault:
         condition: service_healthy
     command: /bin/sh -c "
-      /scripts/02-init-vault.sh && /scripts/03-init-users.sh && /scripts/04-init-ssh.sh && /scripts/05-init-ssh-dc2.sh
+      /scripts/03-init-users.sh && /scripts/04-init-ssh.sh && /scripts/05-init-ssh-dc2.sh
       "
+    restart: "no"
+
+  # ──────────────────────────────────────────────
+  # Terraform Init — Configure Vault via Terraform
+  # ──────────────────────────────────────────────
+  terraform-init:
+    image: hashicorp/terraform:1.10
+    container_name: terraform-init
+    entrypoint: [""]
+    volumes:
+      - ./terraform:/terraform:rw
+      - ./certs:/certs:ro
+      - ./vault/policies:/vault/policies:ro
+    environment:
+      - VAULT_ADDR=https://vault:8200
+      - VAULT_TOKEN=root-token
+      - VAULT_SKIP_VERIFY=true
+    working_dir: /terraform
+    depends_on:
+      vault:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        rm -f .terraform.lock.hcl terraform.tfstate* 2>/dev/null
+        terraform init -upgrade &&
+        terraform apply -auto-approve \
+          -var='vault_token=root-token' \
+          -var='vault_addr=https://vault:8200' \
+          -var='certs_dir=/certs' \
+          -var='policies_dir=/vault/policies'
     restart: "no"
 
   # ──────────────────────────────────────────────
@@ -73,6 +105,8 @@ services:
       - VAULT_ADDR=https://vault:8200
     depends_on:
       vault-init:
+        condition: service_completed_successfully
+      terraform-init:
         condition: service_completed_successfully
     ports:
       - "9090:9090"

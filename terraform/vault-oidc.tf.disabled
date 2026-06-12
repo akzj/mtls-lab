@@ -8,11 +8,11 @@ resource "vault_jwt_auth_backend" "oidc" {
   type               = "oidc"
   path               = "oidc"
   description        = "OIDC authentication via Authentik"
-  oidc_discovery_url = "http://auth.local:9000/application/o/vault/"
+  oidc_discovery_url = "http://authentik-server:9000/application/o/vault/"
   oidc_client_id     = "vault-client-id"
   oidc_client_secret = "vault-client-secret"
   default_role       = "dev"
-  bound_issuer       = "http://auth.local:9000/application/o/vault/"
+  bound_issuer       = "http://authentik-server:9000/application/o/vault/"
 }
 
 # ---------------------------------------------------------------------------
