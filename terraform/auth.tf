@@ -1,4 +1,10 @@
 # Server policy is already defined in policies.tf (vault_policy.server)
+# Enable userpass auth backend for multi-user demo
+resource "vault_auth_backend" "userpass" {
+  type        = "userpass"
+  path        = "userpass"
+  description = "Username/password authentication for multi-user demo"
+}
 
 # Enable certificate auth backend
 resource "vault_auth_backend" "cert" {
