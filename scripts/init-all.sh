@@ -17,8 +17,9 @@ while ! curl -s http://localhost:9000/api/v3/ >/dev/null 2>&1; do sleep 2; done
 echo "  Authentik ready ✅"
 
 echo "[3/4] Initializing Authentik..."
+docker cp "$SCRIPT_DIR/create_ak_config.py" authentik-server:/create_ak_config.py
 docker exec authentik-server /ak-root/venv/bin/python3 \
-  "$SCRIPT_DIR/create_ak_config.py" 2>&1 | grep -E "Group:|User:|OIDC|Signing|Application|Done" | sed 's/^/  /'
+  /create_ak_config.py 2>&1 | grep -E "Group:|User:|OIDC|Signing|Application|Done" | sed 's/^/  /'
 echo "  Authentik init complete ✅"
 
 echo "[4/4] Applying Terraform for Vault PKI + KV + OIDC..."
