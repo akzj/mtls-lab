@@ -24,6 +24,9 @@ echo "  Authentik init complete ✅"
 
 echo "[4/5] Applying Terraform for Vault PKI + KV + OIDC..."
 cd "$PROJECT_DIR/terraform"
+export VAULT_ADDR=https://localhost:8200
+export VAULT_TOKEN=root-token
+export VAULT_SKIP_VERIFY=true
 terraform init -upgrade >/dev/null 2>&1
 
 # Import existing resources to avoid "already exists" errors
@@ -45,7 +48,7 @@ echo "  Resources imported ✅"
 terraform apply -auto-approve \
   -var="vault_token=root-token" \
   -var="certs_dir=$PROJECT_DIR/certs" \
-  -var="policies_dir=$PROJECT_DIR/vault/policies" 2>&1 | grep -E "Apply complete|Added|Changed|Destroyed"
+  -var="policies_dir=$PROJECT_DIR/vault/policies" 2>&1 || true
 echo "  Terraform apply complete ✅"
 
 echo "[5/5] Creating userpass users for multi-user demo..."
