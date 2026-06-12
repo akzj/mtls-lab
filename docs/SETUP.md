@@ -11,12 +11,12 @@
 |------|-----------------|---------|
 | Docker Desktop | latest | Container runtime |
 | `docker compose` | v2.x | Multi-container orchestration |
-| `yubico-piv-tool` | 2.7.3 | YubiKey PIV key generation |
-| `yubico-piv-tool` | — | PIN/PUK management |
+| `yubico-piv-tool` | 2.7.3 | YubiKey PIV key generation/import |
 | `opensc` / `pkcs11-tool` | 0.27.1 | PKCS#11 signing operations |
 | `openssl` | 3.6.2 | Certificate creation and verification |
-| `python3` | 3.x | CSR signing script |
+| `python3` | 3.x | CSR signing script (`sign-intermediate.py`) |
 | `cryptography` | (pip) | Python crypto library for DER construction |
+| `terraform` | >= 1.0 | Vault configuration management (IaC) |
 
 ### Install Dependencies (macOS)
 
@@ -33,9 +33,10 @@ pip3 install cryptography
 
 ---
 
-## Step 1: Initialize Root CA on YubiKey
+## Step 1: Initialize Root CA
 
-> ⚠️ **This will generate a new RSA 2048 key on YubiKey PIV slot 9C.**
+> ⚠️ **This creates an RSA 2048 Root CA: OpenSSL key generation → backup → YubiKey import.**
+> The software key backup is retained at `root-ca/root-ca-key.pem` for disaster recovery.
 > Only run once, or if you need to regenerate the root.
 
 ```bash
@@ -49,10 +50,13 @@ bash scripts/01-init-root-ca.sh
 ```
 
 This script:
-1. Generates an RSA 2048 key **on the YubiKey** (slot 9C) — key never leaves hardware
-2. Creates the root CA self-signed certificate using `DER` construction (workaround for
-   `yubico-piv-tool 2.7.3` `selfsign-certificate` bug)
-3. Outputs: `certs/root-ca.crt`, `certs/root-ca.der`, `certs/root-ca.pub`
+1. Generates an RSA 2048 key with OpenSSL (saves backup to `root-ca/root-ca-key.pem`)
+2. Creates a self-signed root CA certificate with CA extensions
+3. Extracts public key and converts to DER format
+4. Verifies the certificate self-signature
+5. Imports the private key into YubiKey PIV slot 9C
+6. Writes the certificate to YubiKey slot 9C
+7. Verifies the certificate on the YubiKey
 
 ### Verify Root CA
 
@@ -243,11 +247,11 @@ openssl verify -CAfile certs/trust-chain.crt certs/client.crt
 ```bash
 cd /Users/one/workspace/vault
 
-# Build all services
+# Build all 13+ services
 docker compose build
 
 # Verify images exist
-docker images | grep -E "(go-server|go-client|nginx)"
+docker images | grep -E "(go-server|go-client|nginx|step-ca|gateway|ssh-server|internal-app)"
 ```
 
 ---
@@ -258,20 +262,64 @@ docker images | grep -E "(go-server|go-client|nginx)"
 # Start all services
 docker compose up -d
 
-# Watch initialization order:
-# 1. vault starts (health check runs)
-# 2. vault-init runs PKI + KV + AppRole setup
-# 3. go-server starts (reads Vault secrets)
-# 4. nginx starts (reverse proxy)
-# 5. go-client connects, sends messages, exits
-
-# Follow logs
+# Watch initialization (services start in dependency order)
 docker compose logs -f
+```
+
+Initialization order:
+1. Vault starts (dev-tls mode, HTTPS, health check runs)
+2. PostgreSQL + Redis start (Authentik dependencies)
+3. vault-init runs (placeholder — real init is via init-all.sh)
+4. Authentik server + worker start (OIDC identity provider)
+5. step-ca starts (ACME certificate authority)
+6. go-server starts (reads Vault secrets via VAULT_TOKEN)
+7. nginx starts (reverse proxy)
+8. go-client starts (ACME enrollment → device registration → SSH → heartbeat → WS echo)
+9. Gateway + ssh-server start (SSH bastions)
+
+---
+
+## Step 5: One-Click Initialization
+
+After all services are running, run the initialization script that configures Vault
+(PKI, KV, policies, auth), Authentik (OIDC), and SSH CA (DC1 + DC2).
+
+```bash
+cd /Users/one/workspace/vault
+
+# Run one-click init (Terraform + Authentik config + SSH CA export)
+bash scripts/init-all.sh
+```
+
+This script performs:
+
+| Step | Action | Details |
+|------|--------|---------|
+| [1] | Wait for Vault | Polls `https://localhost:8200/v1/sys/health` |
+| [2] | Wait for Authentik | Polls `http://localhost:9000/api/v3/` |
+| [3] | Initialize Authentik | Creates groups (admin/ops/dev), users, OIDC provider, Application |
+| [4] | Apply Terraform | Runs `terraform apply` in `terraform/` directory for PKI, KV, auth, OIDC, SSH |
+| [5] | Export SSH CA keys | Copies DC1 + DC2 CA public keys to gateway Docker volumes |
+| [6] | Final verification | Checks PKI, KV, SSH, OIDC engines are configured |
+
+Expected output:
+```
+=== mTLS Lab: Full Initialization ===
+[1/6] Waiting for Vault... Vault ready ✅
+[2/6] Waiting for Authentik... Authentik ready ✅
+[3/6] Initializing Authentik... Done
+[4/6] Applying Terraform for Vault PKI + KV + OIDC + SSH... Done
+[5/6] Exporting SSH CA public keys... Done
+[6/6] Final verification... PKI KV SSH OIDC
+=== Initialization Complete ===
+Vault UI:     https://localhost:8200/ui
+Authentik:    http://localhost:9000
+SSH Gateway:  ssh gateway-user@localhost -p 2222
 ```
 
 ---
 
-## Step 5: Verify Deployment
+## Step 6: Verify Deployment
 
 See [VERIFY.md](VERIFY.md) for detailed verification steps.
 
@@ -293,13 +341,13 @@ docker compose logs go-server
 
 ---
 
-## Step 6: Clean Up
+## Step 7: Clean Up
 
 ```bash
 # Stop and remove containers
 docker compose down
 
-# Remove containers + volumes
+# Remove containers + volumes (including SSH CA volumes, Authentik data)
 docker compose down -v
 
 # Remove images
@@ -307,6 +355,9 @@ docker compose down --rmi all
 
 # Remove everything including build cache
 docker compose down --rmi all -v
+
+# Clean Terraform state (if re-initializing)
+cd terraform && rm -rf .terraform .terraform.lock.hcl terraform.tfstate* 2>/dev/null; cd ..
 ```
 
 ---
@@ -319,53 +370,59 @@ docker compose down --rmi all -v
 # Check vault logs
 docker compose logs vault
 
-# Verify vault is accessible
-curl -s http://localhost:8200/v1/sys/health
+# Vault now uses dev-tls (HTTPS). Use skip-verify:
+curl -sk https://localhost:8200/v1/sys/health
+
+# Check vault status inside container
+docker compose exec vault vault status -tls-skip-verify
 ```
 
-### vault-init fails
+### init-all.sh fails
 
 ```bash
-# Check vault-init logs
-docker compose logs vault-init
+# Check vault-init is placeholder only — real init happens on host
+bash scripts/init-all.sh -x  # Run with debug output for diagnosis
 
 # Common issues:
-# - VAULT_TOKEN not set correctly
-# - Vault not yet healthy
-# - Script path wrong (expects /scripts/02-init-vault.sh)
-# - Certificate files not mounted
+# - Vault not yet healthy (wait longer)
+# - Authentik not fully initialized (PostgreSQL/Redis not ready)
+# - Terraform import conflicts (already exists errors)
+# - OIDC timing: Authentik OIDC provider not yet ready when Terraform runs
 
-# Manually run vault-init
-docker compose run --rm vault-init \
-  /bin/sh -c "vault login root-token && /scripts/02-init-vault.sh"
+# Run Terraform manually:
+cd terraform
+export VAULT_ADDR=https://localhost:8200
+export VAULT_SKIP_VERIFY=true
+export VAULT_TOKEN=root-token
+terraform init
+terraform plan -var="vault_token=root-token" -var="certs_dir=$PWD/../certs"
+terraform apply -auto-approve -var="vault_token=root-token" -var="certs_dir=$PWD/../certs"
 ```
 
-### nginx fails to start
+### Authentik login fails
 
 ```bash
-# Check nginx config syntax
-docker compose run --rm nginx nginx -t
+# Check Authentik logs
+docker compose logs authentik-server
 
-# Check nginx logs
-docker compose logs nginx
+# Verify Authentik API
+curl -s http://localhost:9000/api/v3/
+
+# Re-run Authentik init
+docker cp scripts/create_ak_config.py authentik-server:/create_ak_config.py
+docker exec authentik-server python3 /create_ak_config.py
 ```
 
-### Go server can't connect to Vault
+### SSH gateway connection fails
 
 ```bash
-# Verify environment
-docker compose exec go-server env | grep VAULT
+# Check gateway logs
+docker compose logs gateway
 
-# Test Vault connectivity
-docker compose exec go-server wget -qO- http://vault:8200/v1/sys/health
-```
+# Verify SSH CA public key exported
+docker compose exec gateway cat /ssh/ca.pub
 
-### mTLS handshake fails
-
-```bash
-# Verify certificate files exist in container
-docker compose exec nginx ls -la /certs/
-
-# Check certificate chain order
-docker compose exec nginx openssl verify -CAfile /certs/ca-chain.crt /certs/client.crt
+# Re-export CA key manually:
+docker compose exec vault vault read -field=public_key ssh/config/ca | \
+  docker compose exec -T gateway sh -c "cat > /ssh/ca.pub"
 ```

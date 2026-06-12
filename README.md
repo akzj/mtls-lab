@@ -2,10 +2,7 @@
 
 > **Zero-Trust PKI Laboratory with YubiKey Hardware Root of Trust**
 >
-> Three-layer PKI hierarchy · mTLS WebSocket communications · Docker Compose deployment
-> Root CA on YubiKey 5C Nano (RSA 2048, never extractable)
-
----
+> Three-layer PKI hierarchy · mTLS WebSocket · OIDC SSO (Authentik) · SSH CA · ACME (step-ca)
 
 ## Quick Start
 
@@ -18,43 +15,79 @@ docker compose build
 # 2. Deploy the stack
 docker compose up -d
 
-# 3. Watch initialization
+# 3. Run one-click initialization (Terraform + Authentik + SSH CA)
+bash scripts/init-all.sh
+
+# 4. Watch all services
 docker compose logs -f
 ```
 
-After deployment, verify the setup: [docs/VERIFY.md](docs/VERIFY.md)
+After deployment, verify the setup: [docs/VERIFY.md](docs/VERIFY.md)> Root CA on YubiKey 5C Nano (RSA 2048) · Terraform-managed Vault configuration
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    YubiKey 5C Nano                          │
-│                   PIV slot 9C (RSA 2048)                    │
-│               Root CA — COLD (non-extractable)               │
-│               Signs: intermediate CAs only                   │
-└────────────────────┬────────────────────────────────────────┘
-                     │ signs via pkcs11-tool
-          ┌──────────┴──────────┐
-          ▼                     ▼
-┌─────────────────┐  ┌──────────────────────┐
-│ step-ca Interm. │  │ Vault PKI Interm.    │
-│ CA (HOT key)    │  │ CA (HOT key)         │
-│ pathlen:0       │  │ pathlen:0            │
-│                 │  │                      │
-│ Signs:          │  │ Signs:               │
-│  • nginx        │  │  • Go server         │
-│  • nginx-proxy  │  │                      │
-│  • client       │  │                      │
-└────────┬────────┘  └──────────┬───────────┘
-         │                      │
-         ▼                      ▼
-   nginx (reverse proxy)    Go Server (mTLS)
-         │                      │
-         └──────────┬───────────┘
-                    ▼
-              Go Client (mTLS)
+┌──────────────────────────────────────────────────────────────────┐
+│                         YubiKey 5C Nano                         │
+│              Root CA — PIV slot 9C (RSA 2048)                    │
+│              OpenSSL gen → key backup → YubiKey import           │
+│              Signs: intermediate CAs only                        │
+└──────────────┬──────────────┬───────────────────────────────────┘
+               │              │
+               ▼              ▼
+    ┌─────────────────┐  ┌──────────────────────┐
+    │ step-ca Interm. │  │ Vault PKI Interm.    │
+    │ CA (HOT key)    │  │ CA (HOT key)         │
+    │                 │  │                      │
+    │ ACME: client    │  │ Terraform-managed    │
+    │ mTLS: nginx,    │  │ PKI, KV, SSH CA,     │
+    │       nginx-proxy│  │ OIDC, cert auth      │
+    └───────┬─────────┘  └──────┬───────────────┘
+            │                   │
+            ▼                   ▼
+   ┌────────────┐    ┌──────────────────────┐
+   │  step-ca   │    │   Go Server (:9090)  │
+   │  ACME CA   │    │   Web UI  (:9091)    │
+   │  (:8443)   │    │   mTLS + HTTP API    │
+   └─────┬──────┘    └──────┬───────────────┘
+         │                  │
+         ▼                  ▼
+   ┌──────────────────────────────────────┐
+   │    nginx Reverse Proxy (:443)        │
+   │    mTLS termination + upstream mTLS   │
+   │    WebSocket proxy to go-server       │
+   └──────┬──────────────────┬────────────┘
+          │                  │
+          ▼                  ▼
+   ┌──────────┐      ┌───────────────┐
+   │Go Client │      │   Gateway     │
+   │ (ACME    │      │  SSH Bastion  │
+   │  daemon) │      │  (:2222/2223) │
+   └──────────┘      └───────┬───────┘
+                             │
+                             ▼
+                     ┌────────────────┐
+                     │  SSH Server    │
+                     │ internal-app   │
+                     │ (tunnel only)  │
+                     └────────────────┘
+
+┌──────────────────────────────────────────────┐
+│  OIDC SSO                                     │
+│  ┌──────────┐  ┌──────┐  ┌─────────────────┐ │
+│  │Authentik │←─│Redis │←─│  PostgreSQL     │ │
+│  │:9000     │  └──────┘  └─────────────────┘ │
+│  └────┬─────┘                                │
+│       │ OIDC login                           │
+│       ▼                                       │
+│  ┌─────────┐                                  │
+│  │ Vault   │  User → OIDC → policy → access  │
+│  │ (OIDC   │  Groups: admin/ops/dev           │
+│  │  auth)  │                                  │
+│  └─────────┘                                  │
+└──────────────────────────────────────────────┘
 ```
 
 **Full architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
@@ -64,13 +97,14 @@ After deployment, verify the setup: [docs/VERIFY.md](docs/VERIFY.md)
 ## Trust Chain
 
 ```
-Root CA (cold, YubiKey, slot 9C, RSA 2048)
+Root CA (software key backup at root-ca/root-ca-key.pem, YubiKey slot 9C)
   ├── step-ca Intermediate CA (hot, software key)
   │     ├── nginx.crt       (serverAuth, SAN: nginx, localhost, 127.0.0.1)
   │     ├── nginx-proxy.crt (clientAuth, mTLS upstream)
-  │     └── client.crt      (clientAuth, mTLS client)
-  └── Vault PKI Intermediate CA (hot, software key, in Vault)
-        └── server.crt      (serverAuth, SAN: go-server, localhost, 127.0.0.1)
+  │     └── ACME client certs (auto-enrolled via step-ca ACME)
+  └── Vault PKI Intermediate CA (hot, imported into Vault, Terraform-managed)
+        ├── server.crt      (serverAuth, SAN: go-server, localhost, 127.0.0.1)
+        └── SSH CA keys     (DC1 + DC2, auto-generated by Vault SSH engine)
 ```
 
 ### Chain Files
@@ -82,20 +116,36 @@ Root CA (cold, YubiKey, slot 9C, RSA 2048)
 
 ---
 
-## Communication Flow
+## Communication Flows
 
+### mTLS WebSocket (original design)
 ```
-┌──────────┐    wss://nginx:443/ws    ┌──────────┐   http://go-server:9090/ws   ┌───────────┐
-│ Go Client │ ──────────────────────► │  nginx   │ ──────────────────────────► │ Go Server │
-│ (mTLS)    │◄────────────────────────│ (reverse │◄───────────────────────────│ (mTLS)    │
-│           │                         │  proxy)  │                              │           │
-└──────────┘                          └──────────┘                              └───────────┘
+Go Client ───wss://nginx:443/ws───► nginx ───http://go-server:9090/ws───► Go Server
+  (mTLS)      (client→nginx mTLS)   (upstream mTLS to server)            (mTLS echo)
 ```
 
-1. **Client → nginx**: Mutual TLS via `client.crt` + `ca-chain.crt` verification
-2. **nginx → Server**: Mutual TLS via `nginx-proxy.crt` + `trust-chain.crt` verification
-3. **Go Server**: Reads secrets from Vault at startup (`kv/data/server-config`)
-4. **WebSocket**: Client sends 3 test messages, receives `[server-echo]` responses
+### ACME Certificate Enrollment (client daemon)
+```
+Go Client ─────────────https://step-ca:8443/acme/directory──────────► step-ca
+  (ACME HTTP-01)        (validated via root-ca.crt)                   (ACME CA)
+```
+
+### OIDC SSO (Vault login)
+```
+User ──► Authentik :9000 ──OIDC──► Vault :8200 ──policy──► Access
+  (admin/ops/dev)    (SSO login)     (OIDC auth)    (RBAC)
+```
+
+### SSH Certificate Auth
+```
+ssh gateway-user@localhost -p 2222 ──► Gateway ──signed cert──► SSH Server
+  (Vault-signed cert)                   (bastion)    (verify: /ssh/ca.pub)
+```
+
+1. **mTLS WebSocket**: Client ACME cert → nginx (verified via ca-chain.crt) → upstream to Go server (verified via trust-chain.crt)
+2. **ACME Enrollment**: Client bootstraps certificate from step-ca using HTTP-01 challenge
+3. **OIDC SSO**: Authentik provides identity → Vault OIDC auth → policies mapped by group
+4. **SSH CA**: Vault SSH engine signs user public keys for gateway access (DC1:2222, DC2:2223)
 
 ---
 
@@ -103,16 +153,26 @@ Root CA (cold, YubiKey, slot 9C, RSA 2048)
 
 ```
 vault/
-├── docker-compose.yml          # Service orchestration
+├── docker-compose.yml          # Service orchestration (12+ services)
 ├── README.md                   # This file
 ├── docs/
 │   ├── ARCHITECTURE.md         # PKI architecture & communication flow
 │   ├── SETUP.md                # Deployment guide (root CA → build → deploy)
 │   └── VERIFY.md               # Verification steps & checklist
+├── terraform/                  # Terraform-managed Vault configuration
+│   ├── main.tf                 # Provider config
+│   ├── pki.tf                  # PKI secrets engine + intermediate import
+│   ├── kv.tf                   # KV v2 secrets engine
+│   ├── auth.tf                 # Cert + userpass auth backends
+│   ├── vault-oidc.tf           # OIDC (Authentik) auth backend + roles
+│   ├── policies.tf             # Admin/ops/dev/server policies
+│   ├── ssh.tf                  # SSH CA (DC1)
+│   ├── ssh-dc2.tf              # SSH CA (DC2)
+│   ├── variables.tf            # Input variables
+│   ├── apply.sh                # Convenience apply script
+│   └── terraform.tfvars.example
 ├── certs/                      # All certificates and keys
-│   ├── root-ca.crt             # Root CA certificate (PEM)
-│   ├── root-ca.der             # Root CA certificate (DER)
-│   ├── root-ca.pub             # Root CA public key (PEM)
+│   ├── root-ca.crt / .der / .pub
 │   ├── intermediate-step-ca.crt / .key / .csr
 │   ├── intermediate-vault-pki.crt / .key / .csr
 │   ├── nginx.crt / nginx-key.pem
@@ -122,28 +182,48 @@ vault/
 │   ├── ca-chain.crt            # step-ca + root
 │   └── trust-chain.crt         # vault PKI + root
 ├── go-server/
-│   ├── main.go                 # WebSocket echo server with mTLS + Vault client
+│   ├── main.go                 # WebSocket echo + Web UI + device API
 │   ├── Dockerfile
-│   ├── go.mod
-│   └── go.sum
+│   ├── go.mod / go.sum
 ├── go-client/
-│   ├── main.go                 # WebSocket client with mTLS
+│   ├── main.go                 # ACME daemon (enrollment, registration, SSH, heartbeat, WS)
 │   ├── Dockerfile
-│   ├── go.mod
-│   └── go.sum
+│   ├── go.mod / go.sum
 ├── nginx/
 │   ├── nginx.conf              # Reverse proxy with mTLS + WebSocket
 │   └── Dockerfile
+├── step-ca/
+│   ├── Dockerfile              # ACME certificate authority
+│   └── config/ca.json          # step-ca configuration
+├── gateway/                    # SSH bastion (DC1, port 2222)
+│   ├── Dockerfile
+│   └── sshd_config
+├── gateway-dc2/                # SSH bastion (DC2, port 2223)
+│   ├── Dockerfile
+│   └── sshd_config
+├── ssh-server/                 # Internal SSH target
+│   ├── Dockerfile
+│   └── sshd_config
+├── internal-app/               # HTTP app (SSH tunnel access only)
+│   ├── Dockerfile
+│   └── main.go
 ├── vault/
-│   ├── config/vault.hcl        # Vault server config
-│   └── policies/server-policy.hcl
+│   ├── config/vault.hcl        # Vault server config (dev-tls, ui=true)
+│   └── policies/
+│       ├── server-policy.hcl   # Go server mTLS cert auth policy
+│       ├── admin-policy.hcl    # Full access
+│       ├── ops-policy.hcl      # Production/staging read, PKI issue
+│       └── dev-policy.hcl      # Dev namespace read-only
 ├── scripts/
-│   ├── 01-init-root-ca.sh      # Root CA on YubiKey setup
-│   ├── 02-init-vault.sh        # Vault PKI + KV + AppRole init
-│   └── sign-intermediate.py    # CSR signing with YubiKey
+│   ├── 01-init-root-ca.sh      # Root CA: OpenSSL gen → YubiKey import
+│   ├── init-all.sh             # One-click init: Authentik + Terraform + SSH CA
+│   ├── create_ak_config.py     # Authentik OIDC provider/user/group setup
+│   ├── sign-intermediate.py    # CSR signing with YubiKey
+│   └── ssh-demo.sh             # SSH CA demo (generate key, sign, connect)
 └── root-ca/
     ├── root-ca-ext.cnf
     ├── root-ca-openssl.cnf
+    ├── root-ca-key.pem         # Root CA private key backup ⚠️
     ├── intermediate-step-ca-openssl.cnf
     └── intermediate-vault-pki-openssl.cnf
 ```
@@ -154,25 +234,33 @@ vault/
 
 | Service | Image | Purpose | Exposed Port |
 |---------|-------|---------|-------------|
-| `vault` | hashicorp/vault:latest | Secrets engine (dev mode) | 8200 |
-| `vault-init` | hashicorp/vault:latest | One-shot PKI + KV + AppRole setup | — |
-| `go-server` | local (go-server/Dockerfile) | mTLS WebSocket echo server | 9090* |
+| `vault` | hashicorp/vault:latest | Secrets engine (dev-tls, HTTPS) | 8200 |
+| `vault-init` | hashicorp/vault:latest | Placeholder (actual init via init-all.sh) | — |
+| `go-server` | local (go-server/Dockerfile) | mTLS WebSocket echo + Web UI + device API | 9090, 9091 |
 | `nginx` | local (nginx/Dockerfile) | mTLS reverse proxy with WebSocket | 443 |
-| `go-client` | local (go-client/Dockerfile) | One-shot mTLS WebSocket test | — |
-
-\* go-server port 9090 is internal (exposed only within the compose network)
+| `go-client` | local (go-client/Dockerfile) | ACME daemon (long-running) | — |
+| `step-ca` | smallstep/step-ca | ACME certificate authority | 8443 |
+| `gateway` | local (gateway/Dockerfile) | SSH bastion (DC1, cert-based auth) | 2222 |
+| `gateway-dc2` | local (gateway-dc2/Dockerfile) | SSH bastion (DC2, cert-based auth) | 2223 |
+| `ssh-server` | local (ssh-server/Dockerfile) | Internal SSH target (no external port) | — |
+| `internal-app` | local (internal-app/Dockerfile) | HTTP app accessible only via SSH tunnel | — |
+| `postgres` | postgres:16-alpine | Authentik database | — |
+| `redis` | redis:7-alpine | Authentik cache/queue | — |
+| `authentik-server` | ghcr.io/goauthentik/server | OIDC identity provider | 9000 |
+| `authentik-worker` | ghcr.io/goauthentik/server | Authentik background tasks | — |
 
 ---
 
 ## Deployment
 
 **Setup** (first time, requires YubiKey):
-1. Initialize Root CA on YubiKey: `bash scripts/01-init-root-ca.sh`
+1. Initialize Root CA: `bash scripts/01-init-root-ca.sh`
 2. Generate intermediates and leaf certs (see [docs/SETUP.md](docs/SETUP.md))
 3. Build containers: `docker compose build`
 4. Deploy: `docker compose up -d`
+5. One-click init: `bash scripts/init-all.sh` (Terraform + Authentik + SSH CA)
 
-**Verify**: See [docs/VERIFY.md](docs/VERIFY.md) for a 14-step verification checklist.
+**Verify**: See [docs/VERIFY.md](docs/VERIFY.md) for the verification checklist.
 
 ---
 
@@ -185,33 +273,41 @@ vault/
 | Slot | 9C (Digital Signature) |
 | Algorithm | RSA 2048 |
 | Key Policy | `never extractable`, `always sensitive`, `always authenticate` |
+| Key Source | OpenSSL-generated → imported to YubiKey (backup at `root-ca/root-ca-key.pem`) |
 | PIN | `123123` |
 
 ---
 
 ## Technical Notes
 
-- RSA 2048 maximum for on-card YubiKey generation (YubiKey 5C Nano limitation)
-- PKCS#11 modules: Yubico (`libykcs11.dylib`) and OpenSC (`opensc-pkcs11.so`)
-- Root CA construction uses manual DER assembly (workaround for `yubico-piv-tool 2.7.3` bug)
-- Vault uses `-dev` mode (auto-initialized, no unseal step required)
+- Root CA: OpenSSL key generation → software backup (`root-ca/root-ca-key.pem`) → YubiKey import
+- RSA 2048 maximum for on-card YubiKey use (5C Nano limitation; generated externally for consistency)
+- Vault uses `-dev-tls` mode (HTTPS with self-signed cert) + `VAULT_API_ADDR=https://vault:8200`
+- Vault healthcheck uses `vault status -tls-skip-verify` to handle dev-tls self-signed cert
 - All private keys: `chmod 600`
+- All Vault configuration managed by Terraform HCL in `terraform/`
+- step-ca ACME server at `:8443` issues client certs to go-client via HTTP-01 challenge
+- SSH CA keys auto-generated by Vault SSH secrets engine (no key material on disk)
+- Authentik OIDC at `:9000` with PostgreSQL + Redis backing
 
 ---
 
 ## Security Properties
 
-- **Hardware root of trust**: Root CA key never leaves YubiKey
+- **Hardware root of trust**: Root CA key in YubiKey (software backup retained for disaster recovery)
 - **Defense in depth**: Two separate intermediate CAs (compromise of one ≠ compromise of the other)
-- **Dual mTLS**: Both ingress and backend paths use mutual TLS
+- **Dual mTLS**: Both ingress (client→nginx) and backend (nginx→server) use mutual TLS
+- **OIDC SSO**: Authentik identity → Vault OIDC auth → group-based RBAC (admin/ops/dev)
+- **SSH CA**: Vault SSH engine signs certificates — unsigned keys rejected by gateways
 - **TLS 1.2 minimum**: No legacy protocol support
-- **Secrets isolation**: Application secrets in Vault, not in environment or config files
+- **Secrets isolation**: Application secrets in Vault KV, not in environment or config files
 - **Read-only cert mounts**: All certificate volumes mounted `:ro`
+- **No password auth**: Gateways and SSH targets use certificate-only auth (`PasswordAuthentication no`)
 
 ---
 
 ## References
 
-- [Architecture Document](docs/ARCHITECTURE.md) — Full PKI hierarchy, mTLS flow, component responsibilities
+- [Architecture Document](docs/ARCHITECTURE.md) — Full PKI hierarchy, OIDC flow, SSH CA, component responsibilities
 - [Setup Guide](docs/SETUP.md) — Step-by-step from YubiKey initialization to deployment
-- [Verification Guide](docs/VERIFY.md) — 14-point verification checklist
+- [Verification Guide](docs/VERIFY.md) — Verification checklist including OIDC + SSH CA + Terraform
