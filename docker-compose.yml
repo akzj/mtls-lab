@@ -294,21 +294,6 @@ services:
       "
     restart: "no"
 
-  # ──────────────────────────────────────────────
-  # Authentik Init — create groups, users, OIDC provider
-  # ──────────────────────────────────────────────
-  authentik-init:
-    image: ghcr.io/goauthentik/server:latest
-    container_name: authentik-init
-    user: "0"
-    volumes:
-      - ./scripts:/scripts:ro
-    entrypoint: ["python3", "/scripts/create_ak_config.py"]
-    depends_on:
-      authentik-server:
-        condition: service_started
-    restart: "no"
-
 volumes:
   ssh-ca-pub:
   ssh-ca-dc2-pub:
