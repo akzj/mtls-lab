@@ -133,7 +133,7 @@ echo "  Using invalidation flow: ${INVAL_FLOW_UUID}"
 # Create OAuth2 Provider
 # Note: Use heredoc for complex JSON with arrays of objects
 cat > /tmp/provider-data.json << PROVIDER_EOF
-{"name":"Vault OIDC","authorization_flow":"${AUTH_FLOW_UUID}","invalidation_flow":"${INVAL_FLOW_UUID}","client_type":"confidential","client_id":"vault-client-id","client_secret":"vault-client-secret","redirect_uris":[{"url":"http://localhost:8250/oidc/callback","matching_mode":"strict"}]}
+{"name":"Vault OIDC","authorization_flow":"${AUTH_FLOW_UUID}","invalidation_flow":"${INVAL_FLOW_UUID}","client_type":"confidential","client_id":"vault-client-id","client_secret":"vault-client-secret","redirect_uris":[{"url":"http://localhost:8200/oidc/callback","matching_mode":"strict"},{"url":"https://localhost:8200/oidc/callback","matching_mode":"strict"},{"url":"http://localhost:8200/ui/vault/auth/oidc/oidc/callback","matching_mode":"strict"},{"url":"https://localhost:8200/ui/vault/auth/oidc/oidc/callback","matching_mode":"strict"},{"url":"http://localhost:8200/v1/auth/oidc/oidc/callback","matching_mode":"strict"},{"url":"https://localhost:8200/v1/auth/oidc/oidc/callback","matching_mode":"strict"}]}
 PROVIDER_EOF
 PROVIDER_RESP=$(wget -q -O- --header="$AUTH_HEADER" --header="$CONTENT_TYPE" \
   --post-file=/tmp/provider-data.json "${AUTHENTIK_URL}/api/v3/providers/oauth2/" 2>/dev/null)
