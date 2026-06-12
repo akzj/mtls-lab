@@ -38,3 +38,19 @@ resource "vault_pki_secret_backend_role" "server" {
   client_flag    = false
   require_cn     = false
 }
+
+# Role for issuing user/client certificates (CLI auth)
+resource "vault_pki_secret_backend_role" "user" {
+  depends_on     = [vault_mount.pki]
+  backend        = vault_mount.pki.path
+  name           = "user"
+  allow_any_name = true
+  max_ttl        = 31536000
+  key_type       = "rsa"
+  key_bits       = 2048
+  server_flag    = false
+  client_flag    = true
+  allow_ip_sans  = false
+  key_usage      = ["DigitalSignature", "KeyEncipherment"]
+  ext_key_usage  = ["ClientAuth"]
+}

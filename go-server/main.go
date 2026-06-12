@@ -101,6 +101,9 @@ func main() {
 	// Route: Device registration API (requires mTLS client cert)
 	mtlsMux.HandleFunc("/api/register", registerHandler)
 
+	// Route: Whoami — returns authenticated user from client cert
+	mtlsMux.HandleFunc("/api/whoami", whoamiHandler)
+
 	// --- Routes on HTTP mux (:9091, no client cert needed) ---
 
 	// Device manager (initializes SSH CA keys, heartbeat checker)
@@ -610,6 +613,27 @@ func getSSHCAKey(addr, token, path string) string {
 	}
 	log.Printf("No public_key found in %s response", path)
 	return ""
+}
+
+// whoamiHandler handles GET /api/whoami — returns user identity from client cert
+func whoamiHandler(w http.ResponseWriter, r *http.Request) {
+	var username string
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		cert := r.TLS.PeerCertificates[0]
+		username = cert.Subject.CommonName
+		log.Printf("[whoami] User authenticated via client cert: CN=%s", username)
+	} else {
+		username = "anonymous"
+	}
+
+	resp := map[string]interface{}{
+		"username":    username,
+		"auth_method": "client_cert",
+		"cn":          username,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // registerHandler handles POST /api/register (mTLS required)
