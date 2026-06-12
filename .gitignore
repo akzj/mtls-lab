@@ -27,3 +27,8 @@ go-client/go-client
 # ACME account keys
 client-data/acme-account-key.pem
 client-data/password
+
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfstate*
+terraform/.terraform.lock.hcl
