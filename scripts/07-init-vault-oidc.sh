@@ -9,7 +9,6 @@ echo "=== Zero-FAS Vault OIDC Configuration ==="
 echo "VAULT_ADDR=${VAULT_ADDR}"
 echo "AUTHENTIK_URL=${AUTHENTIK_URL}"
 
-# Wait for Authentik (in case 06-init-authentik.sh is still finalizing)
 echo "Waiting for Authentik API..."
 for i in $(seq 1 30); do
   if wget -q -O- "${AUTHENTIK_URL}/api/v3/" >/dev/null 2>&1; then
@@ -19,7 +18,6 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-# Wait for the Vault OIDC application to exist
 echo "Waiting for Vault OIDC application in Authentik..."
 for i in $(seq 1 15); do
   APP_DATA=$(wget -q -O- --header="Authorization: Bearer ${AUTHENTIK_BOOTSTRAP_TOKEN}" \
@@ -33,7 +31,6 @@ for i in $(seq 1 15); do
   sleep 2
 done
 
-# The OIDC discovery URL for the Authentik application
 OIDC_DISCOVERY_URL="${AUTHENTIK_URL}/application/o/vault/"
 
 # --------------------------------------------------
@@ -52,69 +49,46 @@ vault write auth/oidc/config \
   oidc_discovery_url="${OIDC_DISCOVERY_URL}" \
   oidc_client_id="vault-client-id" \
   oidc_client_secret="vault-client-secret" \
-  default_role="dev" \
-  bound_issuer="${OIDC_DISCOVERY_URL}"
+  default_role="dev"
 echo "  OIDC config written."
 
 # --------------------------------------------------
 # Create OIDC roles mapped to Vault policies
+# Redirect URIs must match between Vault roles and Authentik OIDC provider.
+# Uses port 8200 (Vault's TLS port) — NOT port 8250 (CLI callback port).
 # --------------------------------------------------
 echo ""
 echo "--- Creating OIDC roles ---"
 
-# Admin role → admin-policy (full access)
-cat <<EOF | vault write auth/oidc/role/admin -
-{
-  "bound_audiences": ["vault-client-id"],
-  "allowed_redirect_uris": [
-    "http://localhost:8250/oidc/callback",
-    "http://localhost:8200/oidc/callback",
-    "https://localhost:8200/oidc/callback",
-    "http://localhost:8200/v1/auth/oidc/oidc/callback",
-    "https://localhost:8200/ui/vault/auth/oidc/oidc/callback"
-  ],
-  "user_claim": "sub",
-  "policies": ["admin-policy"],
-  "ttl": "1h"
-}
-EOF
-echo "  Role 'admin' → admin-policy"
+ALLOWED_REDIRECT_URIS='[
+  "http://localhost:8200/oidc/callback",
+  "https://localhost:8200/oidc/callback",
+  "http://localhost:8200/ui/vault/auth/oidc/oidc/callback",
+  "https://localhost:8200/ui/vault/auth/oidc/oidc/callback",
+  "http://localhost:8200/v1/auth/oidc/oidc/callback",
+  "https://localhost:8200/v1/auth/oidc/oidc/callback"
+]'
 
-# Ops role → ops-policy
-cat <<EOF | vault write auth/oidc/role/ops -
+create_oidc_role() {
+  local role=$1
+  local policy=$2
+  local ttl=${3:-1h}
+  cat <<EOF | vault write "auth/oidc/role/${role}" -
 {
   "bound_audiences": ["vault-client-id"],
-  "allowed_redirect_uris": [
-    "http://localhost:8250/oidc/callback",
-    "http://localhost:8200/oidc/callback",
-    "https://localhost:8200/oidc/callback",
-    "http://localhost:8200/v1/auth/oidc/oidc/callback",
-    "https://localhost:8200/ui/vault/auth/oidc/oidc/callback"
-  ],
+  "allowed_redirect_uris": ${ALLOWED_REDIRECT_URIS},
   "user_claim": "sub",
-  "policies": ["ops-policy"],
-  "ttl": "1h"
+  "oidc_scopes": ["openid"],
+  "policies": ["${policy}"],
+  "ttl": "${ttl}"
 }
 EOF
-echo "  Role 'ops' → ops-policy"
+  echo "  Role '${role}' → ${policy}"
+}
 
-# Dev role → dev-policy
-cat <<EOF | vault write auth/oidc/role/dev -
-{
-  "bound_audiences": ["vault-client-id"],
-  "allowed_redirect_uris": [
-    "http://localhost:8250/oidc/callback",
-    "http://localhost:8200/oidc/callback",
-    "https://localhost:8200/oidc/callback",
-    "http://localhost:8200/v1/auth/oidc/oidc/callback",
-    "https://localhost:8200/ui/vault/auth/oidc/oidc/callback"
-  ],
-  "user_claim": "sub",
-  "policies": ["dev-policy"],
-  "ttl": "1h"
-}
-EOF
-echo "  Role 'dev' → dev-policy"
+create_oidc_role admin admin-policy
+create_oidc_role ops ops-policy
+create_oidc_role dev dev-policy
 
 echo ""
 echo "--- Verifying OIDC configuration ---"
