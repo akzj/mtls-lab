@@ -479,7 +479,7 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 	defer session.Close()
 
 	// Set up terminal with PTY
-	if err := session.RequestPty("xterm", 40, 80, ssh.TerminalModes{
+	if err := session.RequestPty("vt100", 40, 80, ssh.TerminalModes{
 		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
@@ -493,13 +493,13 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 	stderr, _ := session.StderrPipe()
 
 	// Start shell
-		if err := session.Start("/bin/sh"); err != nil {
+		if err := session.Start("/bin/sh -i"); err != nil {
 		log.Printf("SSH shell error: %v", err)
 		sendWSMessage(conn, "Failed to start SSH shell")
 		return
 	}
 	// Request PTY for terminal
-	if err := session.RequestPty("xterm", 80, 40, ssh.TerminalModes{
+	if err := session.RequestPty("vt100", 80, 40, ssh.TerminalModes{
 		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
@@ -537,6 +537,7 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 		for {
 			n, err := stdout.Read(buf)
 			if n > 0 {
+				log.Printf("SSH→WS: %d bytes [%q]", n, string(buf[:n]))
 				conn.WriteMessage(websocket.BinaryMessage, buf[:n])
 			}
 			if err != nil {
@@ -1044,7 +1045,7 @@ func deviceShellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vault
 	defer session.Close()
 
 	// Set up terminal with PTY
-	if err := session.RequestPty("xterm", 40, 80, ssh.TerminalModes{
+	if err := session.RequestPty("vt100", 40, 80, ssh.TerminalModes{
 		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
