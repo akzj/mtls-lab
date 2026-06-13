@@ -1085,7 +1085,7 @@ func initOIDC() error {
 	ctx := context.Background()
 
 	// Authentik OIDC discovery URL
-	providerURL := "http://authentik-server:9000/application/o/go-server/"
+	providerURL := "http://auth.local:9000/application/o/go-server/"
 
 	var err error
 	oidcProvider, err = oidc.NewProvider(ctx, providerURL)
