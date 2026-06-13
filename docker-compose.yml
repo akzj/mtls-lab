@@ -144,6 +144,7 @@ services:
       context: ./go-client
       dockerfile: Dockerfile
     container_name: go-client
+    tty: true
     volumes:
       - ./certs:/app/certs:ro
       - ./go-server/keys:/app/keys:ro
