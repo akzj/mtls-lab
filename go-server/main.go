@@ -504,7 +504,7 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}); err != nil {
-		log.Printf("PTY request error: %v (shell without PTY)", err)
+		log.Printf("PTY request error (non-fatal): %v", err)
 	}
 	log.Printf("Shell started, launching data forwarders...")
 
