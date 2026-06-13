@@ -46,12 +46,12 @@ inval_flow = Flow.objects.filter(slug='default-invalidation-flow').first()
 
 if auth_flow:
     redirect_uris_list = [
-        "http://localhost:8200/oidc/callback",
-        "https://localhost:8200/oidc/callback",
-        "http://localhost:8200/ui/vault/auth/oidc/oidc/callback",
-        "https://localhost:8200/ui/vault/auth/oidc/oidc/callback",
-        "http://localhost:8200/v1/auth/oidc/oidc/callback",
-        "https://localhost:8200/v1/auth/oidc/oidc/callback",
+        "http://vault.lab.local:8200/oidc/callback",
+        "https://vault.lab.local:8200/oidc/callback",
+        "http://vault.lab.local:8200/ui/vault/auth/oidc/oidc/callback",
+        "https://vault.lab.local:8200/ui/vault/auth/oidc/oidc/callback",
+        "http://vault.lab.local:8200/v1/auth/oidc/oidc/callback",
+        "https://vault.lab.local:8200/v1/auth/oidc/oidc/callback",
     ]
     prov, _ = OAuth2Provider.objects.get_or_create(
         name='Vault OIDC',
@@ -87,8 +87,8 @@ else:
 print("")
 if auth_flow:
     go_server_redirect_uris = [
-        "http://localhost:9091/auth/callback",
-        "https://localhost:9091/auth/callback",
+        "http://web.lab.local:9091/auth/callback",
+        "https://web.lab.local:9091/auth/callback",
     ]
     go_prov, _ = OAuth2Provider.objects.get_or_create(
         name='Go Server',
@@ -112,7 +112,7 @@ if auth_flow:
 
     go_app, _ = Application.objects.get_or_create(
         slug='go-server',
-        defaults={'name': 'Go Server', 'provider': go_prov, 'meta_launch_url': 'http://localhost:9091/'},
+        defaults={'name': 'Go Server', 'provider': go_prov, 'meta_launch_url': 'http://web.lab.local:9091/'},
     )
     print(f"Application: {go_app.name}")
 else:

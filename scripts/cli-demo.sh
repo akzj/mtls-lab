@@ -2,8 +2,8 @@
 # cli-demo.sh — Demonstrate user certificate authentication (Vault PKI + mTLS)
 set -e
 
-VAULT_ADDR="${VAULT_ADDR:-https://localhost:8200}"
-GO_SERVER="${GO_SERVER:-https://localhost:9090}"
+VAULT_ADDR="${VAULT_ADDR:-https://vault.lab.local:8200}"
+GO_SERVER="${GO_SERVER:-https://web.lab.local:9090}"
 CA_CHAIN="${CA_CHAIN:-/Users/one/workspace/vault/certs/trust-chain.crt}"
 
 echo "═══════════════════════════════════════════════"
@@ -83,7 +83,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # Try direct connection to go-server on :9090
 RESULT=$(curl -s --cert /tmp/cli-user.crt --key /tmp/cli-user-key.pem \
   --cacert "$CA_CHAIN" \
-  "https://localhost:9090/api/whoami" 2>&1) || \
+  "https://web.lab.local:9090/api/whoami" 2>&1) || \
 RESULT=$(echo '{"username":"admin@zero-fas.local","auth_method":"client_cert","note":"direct"}')
 
 echo "  Response:"
@@ -106,4 +106,4 @@ echo ""
 echo "  To re-test:"
 echo "    curl --cert /tmp/cli-user.crt --key /tmp/cli-user-key.pem \\"
 echo "      --cacert ${CA_CHAIN} \\"
-echo "      https://localhost:9090/api/whoami"
+echo "      https://web.lab.local:9090/api/whoami"

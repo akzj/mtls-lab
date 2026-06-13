@@ -23,12 +23,12 @@ resource "vault_jwt_auth_backend" "oidc" {
 
 locals {
   allowed_redirect_uris = [
-    "http://localhost:8200/oidc/callback",
-    "https://localhost:8200/oidc/callback",
-    "http://localhost:8200/ui/vault/auth/oidc/oidc/callback",
-    "https://localhost:8200/ui/vault/auth/oidc/oidc/callback",
-    "http://localhost:8200/v1/auth/oidc/oidc/callback",
-    "https://localhost:8200/v1/auth/oidc/oidc/callback",
+    "http://vault.lab.local:8200/oidc/callback",
+    "https://vault.lab.local:8200/oidc/callback",
+    "http://vault.lab.local:8200/ui/vault/auth/oidc/oidc/callback",
+    "https://vault.lab.local:8200/ui/vault/auth/oidc/oidc/callback",
+    "http://vault.lab.local:8200/v1/auth/oidc/oidc/callback",
+    "https://vault.lab.local:8200/v1/auth/oidc/oidc/callback",
   ]
 }
 

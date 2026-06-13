@@ -1102,7 +1102,7 @@ func initOIDC() error {
 	oauthConfig = &oauth2.Config{
 		ClientID:     "go-server-client-id",
 		ClientSecret: "go-server-client-secret",
-		RedirectURL:  "http://localhost:9091/auth/callback",
+		RedirectURL:  "http://web.lab.local:9091/auth/callback",
 		Endpoint:     oidcProvider.Endpoint(),
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 	}
@@ -1448,7 +1448,7 @@ func (tm *TunnelManager) createTunnel(targetHost string, targetPort int, descrip
 		TargetHost:  targetHost,
 		TargetPort:  targetPort,
 		Description: description,
-		URL:         fmt.Sprintf("http://localhost:9091/tunnel/%d/", id),
+		URL:         fmt.Sprintf("http://web.lab.local:9091/tunnel/%d/", id),
 		Status:      "active",
 		client:      gatewayClient,
 		stopCh:      stopCh,

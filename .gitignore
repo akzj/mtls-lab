@@ -32,3 +32,5 @@ client-data/password
 terraform/.terraform/
 terraform/terraform.tfstate*
 terraform/.terraform.lock.hcl
+root-ca/
+certs/

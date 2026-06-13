@@ -24,7 +24,7 @@ echo "  Authentik init complete ✅"
 
 echo "[4/6] Applying Terraform for Vault PKI + KV + OIDC + SSH..."
 cd "$PROJECT_DIR/terraform"
-export VAULT_ADDR=https://localhost:8200
+export VAULT_ADDR=https://vault.lab.local:8200
 export VAULT_TOKEN=root-token
 export VAULT_SKIP_VERIFY=true
 
@@ -61,14 +61,14 @@ terraform apply -auto-approve \
 echo "  Terraform apply complete ✅"
 
 # OIDC CLI fallback (if Terraform OIDC step failed due to timing)
-VAULT_ADDR=https://localhost:8200 VAULT_SKIP_VERIFY=true vault write auth/oidc/config \
+VAULT_ADDR=https://vault.lab.local:8200 VAULT_SKIP_VERIFY=true vault write auth/oidc/config \
   oidc_discovery_url=http://authentik-server:9000/application/o/vault/ \
   oidc_client_id=vault-client-id \
   oidc_client_secret=vault-client-secret \
   default_role=dev 2>/dev/null && echo "  OIDC config set ✅" || true
 for role in admin ops dev; do
-  VAULT_ADDR=https://localhost:8200 VAULT_SKIP_VERIFY=true vault write auth/oidc/role/$role \
-    allowed_redirect_uris="http://localhost:8200/oidc/callback,https://localhost:8200/oidc/callback,http://localhost:8200/ui/vault/auth/oidc/oidc/callback,https://localhost:8200/ui/vault/auth/oidc/oidc/callback,http://localhost:8200/v1/auth/oidc/oidc/callback,https://localhost:8200/v1/auth/oidc/oidc/callback" \
+  VAULT_ADDR=https://vault.lab.local:8200 VAULT_SKIP_VERIFY=true vault write auth/oidc/role/$role \
+    allowed_redirect_uris="http://vault.lab.local:8200/oidc/callback,https://vault.lab.local:8200/oidc/callback,http://vault.lab.local:8200/ui/vault/auth/oidc/oidc/callback,https://vault.lab.local:8200/ui/vault/auth/oidc/oidc/callback,http://vault.lab.local:8200/v1/auth/oidc/oidc/callback,https://vault.lab.local:8200/v1/auth/oidc/oidc/callback" \
     bound_audiences=vault-client-id \
     user_claim=sub \
     oidc_scopes=openid \
@@ -113,11 +113,11 @@ echo "  OIDC:" && docker exec -e VAULT_SKIP_VERIFY=true vault vault auth list 2>
 
 echo ""
 echo "=== Initialization Complete ==="
-echo "Vault UI:     https://localhost:8200/ui (OIDC: admin/123123)"
+echo "Vault UI:     https://vault.lab.local:8200/ui (OIDC: admin/123123)"
 echo "             https://vault.lab.local:8200/ui"
 echo "Authentik:    http://localhost:9000 (admin/123123)"
 echo "             http://auth.lab.local:9000 (admin/123123)"
-echo "Web UI:       http://localhost:9091"
+echo "Web UI:       http://web.lab.local:9091"
 echo "             http://web.lab.local:9091"
 echo "SSH Gateway:  ssh gateway-user@localhost -p 2222"
 echo "             ssh gateway-user@vault.lab.local -p 2222"
