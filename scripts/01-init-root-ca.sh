@@ -147,7 +147,7 @@ echo "      (Key already backed up at: ${KEY_PEM})"
 
 # Convert PEM key to DER for YubiKey import
 TMP_KEY_DER=$(mktemp /tmp/root-ca-key.XXXXXXXXXX)
-openssl pkcs8 -topk8 -nocrypt -in "$KEY_PEM" -outform DER -out "$TMP_KEY_DER" 2>/dev/null
+openssl pkcs8 -topk8 -nocrypt -in "$KEY_PEM" -outform DER -out "$TMP_KEY_DER"
 
 # Check if slot 9c already has a key
 if yubico-piv-tool -s "$SLOT" -a status 2>&1 | grep -q "Algorithm"; then
@@ -156,8 +156,8 @@ fi
 
 yubico-piv-tool -s "$SLOT" \
     -i "$TMP_KEY_DER" \
-    -a import-key \
     -k "$MGMT_KEY" \
+    -a import-key \
     2>&1
 if [ $? -eq 0 ]; then
   rm -f "$TMP_KEY_DER"
