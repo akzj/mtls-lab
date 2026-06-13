@@ -493,10 +493,18 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 	stderr, _ := session.StderrPipe()
 
 	// Start shell
-		if err := session.Start("/bin/sh -i"); err != nil {
+		if err := session.Start("/bin/sh"); err != nil {
 		log.Printf("SSH shell error: %v", err)
 		sendWSMessage(conn, "Failed to start SSH shell")
 		return
+	}
+	// Request PTY for terminal
+	if err := session.RequestPty("xterm", 80, 40, ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}); err != nil {
+		log.Printf("PTY request error: %v (shell without PTY)", err)
 	}
 	log.Printf("Shell started, launching data forwarders...")
 
