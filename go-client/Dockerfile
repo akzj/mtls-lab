@@ -6,11 +6,13 @@ RUN go mod download
 COPY . .
 RUN go build -o client .
 
-# Final runtime image (step CLI replaced by Go ACME SDK)
+# Final runtime image
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates openssh openssh-server openssh-sftp-server
+RUN ssh-keygen -A
+
 WORKDIR /app
 COPY --from=builder /app/client .
-# certs are mounted as volume (docker-compose.yml volumes: ./certs:/app/certs:ro)
 EXPOSE 22
+# Start sshd in background, then run go-client in foreground
 CMD ["./client"]

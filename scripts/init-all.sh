@@ -87,7 +87,7 @@ done
 echo ""
 echo "[5/6] Exporting SSH CA public keys..."
 # Read CA public keys from Vault and write to Docker named volumes
-# Gateway and ssh-server mount ssh-ca-pub:/ssh (read-only for them)
+# Gateway and go-client mount ssh-ca-pub:/ssh (read-only for them)
 # We write from the host using a temporary Alpine container
 DC1_CA_KEY=$(docker exec -e VAULT_SKIP_VERIFY=true vault vault read -field=public_key ssh/config/ca 2>/dev/null)
 if [ -n "$DC1_CA_KEY" ]; then

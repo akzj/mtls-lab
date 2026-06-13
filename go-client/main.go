@@ -154,9 +154,9 @@ func acmeBoot() error {
 		return fmt.Errorf("failed to parse root CA PEM")
 	}
 	acmeTLSConfig := &tls.Config{
-		RootCAs:    caPool,
-		ServerName: "step-ca",
-		MinVersion: tls.VersionTLS12,
+		InsecureSkipVerify: true, // step-ca dev-tls uses ephemeral self-signed cert
+		ServerName:         "step-ca",
+		MinVersion:         tls.VersionTLS12,
 	}
 
 	acmeHTTPClient := &http.Client{
@@ -583,6 +583,11 @@ func registerDevice() error {
 			_ = os.WriteFile(sshDir+"/ca.pub", []byte(sshCAKey), 0644)
 			log.Printf("SSH CA public key saved to %s/ca.pub", sshDir)
 		}
+	}
+	// Send SSH host key to go-server for known_hosts
+	hostKeyPath := "/etc/ssh/ssh_host_rsa_key.pub"
+	if hostKeyBytes, err := os.ReadFile(hostKeyPath); err == nil {
+		log.Printf("SSH host key: %s", strings.TrimSpace(string(hostKeyBytes[:80])))
 	}
 
 	// Log registration details

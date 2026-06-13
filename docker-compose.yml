@@ -49,6 +49,7 @@ services:
       - "5354:53/tcp"
     command: -conf /etc/coredns/Corefile
     restart: unless-stopped
+    tty: true
 
   # ──────────────────────────────────────────────
   # Vault Init — one-shot PKI + KV + SSH + cert auth
@@ -99,6 +100,7 @@ services:
       - "9090:9090"
       - "9091:9091"
     restart: unless-stopped
+    tty: true
 
   # ──────────────────────────────────────────────
   # nginx — mTLS reverse proxy with WebSocket
@@ -116,6 +118,7 @@ services:
     depends_on:
       - go-server
     restart: unless-stopped
+    tty: true
 
   # ──────────────────────────────────────────────
   # step-ca — ACME certificate authority (TLS-ALPN-01)
@@ -131,7 +134,7 @@ services:
       - "8443:8443"
     restart: unless-stopped
   # ──────────────────────────────────────────────
-  # Go Client — ACME daemon (long-running: registration + heartbeat + SSH + WS echo)
+  # Go Client — ACME daemon + SSH server (via supervisord)
   # ──────────────────────────────────────────────
   go-client:
     build:
@@ -141,17 +144,15 @@ services:
     volumes:
       - ./certs:/app/certs:ro
       - ./client-data:/app/data:rw
+      - ssh-ca-pub:/ssh:ro
     environment:
       - STEPPATH=/app/data
+    ports:
+      - "22022:22"
     depends_on:
       - nginx
       - step-ca
-    restart: unless-stopped  # ──────────────────────────────────────────────
-  # Gateway — SSH bastion (唯一对外入口)
-  # ──────────────────────────────────────────────
-  # ──────────────────────────────────────────────
-  # Gateway — SSH bastion (唯一对外入口)
-  # ──────────────────────────────────────────────
+    restart: unless-stopped
   gateway:
     build:
       context: ./gateway
@@ -162,6 +163,7 @@ services:
     ports:
       - "2222:22"
     restart: unless-stopped
+    tty: true
 
   # ──────────────────────────────────────────────
   # Gateway DC2 — SSH bastion with DC2 CA trust (multi-DC isolation demo)
@@ -176,18 +178,7 @@ services:
     ports:
       - "2223:22"
     restart: unless-stopped
-
-  # ──────────────────────────────────────────────
-  # SSH Server — internal SSH target (no external ports)
-  # ──────────────────────────────────────────────
-  ssh-server:
-    build:
-      context: ./ssh-server
-      dockerfile: Dockerfile
-    container_name: ssh-server
-    volumes:
-      - ssh-ca-pub:/ssh:ro
-    restart: unless-stopped
+    tty: true
 
   # ──────────────────────────────────────────────
   # Internal App — only accessible via SSH tunnel
@@ -198,6 +189,7 @@ services:
       dockerfile: Dockerfile
     container_name: internal-app
     restart: unless-stopped
+    tty: true
 
   # ──────────────────────────────────────────────
   # PostgreSQL — Authentik database
@@ -260,6 +252,7 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    tty: true
 
   # ──────────────────────────────────────────────
   # Authentik Worker — background tasks
