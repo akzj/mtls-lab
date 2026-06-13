@@ -115,6 +115,23 @@ if auth_flow:
         defaults={'name': 'Go Server', 'provider': go_prov, 'meta_launch_url': 'http://web.lab.local:9091/'},
     )
     print(f"Application: {go_app.name}")
+
+    # Create scope mappings for name and email claims
+    from authentik.providers.oauth2.models import ScopeMapping
+    sm_name, _ = ScopeMapping.objects.get_or_create(
+        name='Profile - Name',
+        defaults={'scope_name': 'profile', 'expression': 'return {"name": user.name}'},
+    )
+    sm_email, _ = ScopeMapping.objects.get_or_create(
+        name='Email - Email',
+        defaults={'scope_name': 'email', 'expression': 'return {"email": user.email}'},
+    )
+    for p in [prov, go_prov]:
+        if sm_name not in p.property_mappings.all():
+            p.property_mappings.add(sm_name)
+        if sm_email not in p.property_mappings.all():
+            p.property_mappings.add(sm_email)
+    print("Scope mappings added ✅")
 else:
     print("ERROR: No authorization flow available! Cannot create Go Server OIDC provider.")
 

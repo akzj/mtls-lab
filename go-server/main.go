@@ -245,6 +245,11 @@ func main() {
 
 	// OIDC login endpoint (public)
 	httpMux.HandleFunc("/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		if oauthConfig == nil {
+			log.Printf("OIDC login called but oauthConfig is nil (init likely failed)")
+			http.Error(w, "OIDC not configured", http.StatusServiceUnavailable)
+			return
+		}
 		state := generateState()
 		http.Redirect(w, r, oauthConfig.AuthCodeURL(state), http.StatusFound)
 	})
@@ -1094,10 +1099,12 @@ func initOIDC() error {
 	providerURL := "http://auth.lab.local:9000/application/o/go-server/"
 
 	var err error
+	log.Printf("OIDC init: fetching discovery from %s", providerURL)
 	oidcProvider, err = oidc.NewProvider(ctx, providerURL)
 	if err != nil {
-		return fmt.Errorf("OIDC provider discovery: %w", err)
+		return fmt.Errorf("OIDC provider discovery from %s: %w", providerURL, err)
 	}
+	log.Printf("OIDC init: discovery OK, token endpoint: %s", oidcProvider.Endpoint().TokenURL)
 
 	oauthConfig = &oauth2.Config{
 		ClientID:     "go-server-client-id",
