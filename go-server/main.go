@@ -1176,7 +1176,11 @@ func sessionCheck(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return sessionStore.IsValid(cookie.Value)
+	if !sessionStore.IsValid(cookie.Value) {
+		return false
+	}
+	// Reject sessions with empty username (partial login)
+	return sessionStore.GetUser(cookie.Value) != ""
 }
 
 // oidcLogoutHandler clears the session and redirects to Authentik
@@ -1202,8 +1206,11 @@ func sessionHandler(w http.ResponseWriter, r *http.Request) {
 
 	cookie, err := r.Cookie("session_id")
 	if err == nil && sessionStore.IsValid(cookie.Value) {
-		resp["authenticated"] = true
-		resp["user"] = sessionStore.GetUser(cookie.Value)
+		user := sessionStore.GetUser(cookie.Value)
+		if user != "" {
+			resp["authenticated"] = true
+			resp["user"] = user
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
