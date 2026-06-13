@@ -45,8 +45,8 @@ services:
     volumes:
       - ./coredns/Corefile:/etc/coredns/Corefile:ro
     ports:
-      - "5353:53/udp"
-      - "5353:53/tcp"
+      - "5354:53/udp"
+      - "5354:53/tcp"
     command: -conf /etc/coredns/Corefile
     restart: unless-stopped
 
