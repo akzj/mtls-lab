@@ -337,7 +337,7 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 		sshRole = "ssh-dc2/sign/sign-ssh"
 		sshUser = "gateway-user"
 	default: // "1"
-		sshTarget = "gateway:22"
+		sshTarget = "go-client:22"
 		sshRole = "ssh/sign/sign-ssh"
 		sshUser = "gateway-user"
 	}
@@ -643,7 +643,7 @@ func (dm *DeviceManager) Register(certCN string, label string, dc string) *Devic
 	if dc == "2" {
 		sshTarget = "gateway-dc2:22"
 	} else {
-		sshTarget = "gateway:22"
+		sshTarget = "go-client:22"
 	}
 
 	device := &Device{
