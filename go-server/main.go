@@ -349,6 +349,7 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 		return
 	}
 	defer conn.Close()
+	log.Printf("Shell WS upgraded, starting SSH dial...")
 
 	if vaultToken == "" {
 		log.Printf("No vault token available, cannot sign SSH key")
@@ -424,6 +425,7 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 		sendWSMessage(conn, "Parsed key is not a certificate")
 		return
 	}
+	log.Printf("Shell SSH dial succeeded, creating session...")
 
 	// Create an SSH signer from the private key
 	keySigner, err := ssh.NewSignerFromKey(sshKey)
@@ -467,23 +469,27 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 	}
 	defer session.Close()
 
-	// Set up terminal
-	session.RequestPty("xterm-256color", 40, 80, ssh.TerminalModes{
+	// Set up terminal with PTY
+	if err := session.RequestPty("xterm", 40, 80, ssh.TerminalModes{
 		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
-	})
+	}); err != nil {
+		log.Printf("PTY request error (non-fatal): %v", err)
+	}
+	// Start shell
 
 	stdin, _ := session.StdinPipe()
 	stdout, _ := session.StdoutPipe()
 	stderr, _ := session.StderrPipe()
 
 	// Start shell
-	if err := session.Shell(); err != nil {
+		if err := session.Start("/bin/sh -i"); err != nil {
 		log.Printf("SSH shell error: %v", err)
 		sendWSMessage(conn, "Failed to start SSH shell")
 		return
 	}
+	log.Printf("Shell started, launching data forwarders...")
 
 	// WebSocket → SSH stdin (handle resize messages)
 	go func() {
@@ -1019,12 +1025,15 @@ func deviceShellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vault
 	}
 	defer session.Close()
 
-	// Set up terminal
-	session.RequestPty("xterm-256color", 40, 80, ssh.TerminalModes{
+	// Set up terminal with PTY
+	if err := session.RequestPty("xterm", 40, 80, ssh.TerminalModes{
 		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
-	})
+	}); err != nil {
+		log.Printf("PTY request error (non-fatal): %v", err)
+	}
+	// Start shell
 
 	stdin, _ := session.StdinPipe()
 	stdout, _ := session.StdoutPipe()
