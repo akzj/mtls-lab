@@ -158,11 +158,14 @@ yubico-piv-tool -s "$SLOT" \
     -i "$TMP_KEY_DER" \
     -a import-key \
     -k "$MGMT_KEY" \
-    --algorithm RSA2048 \
-    2>&1 | while IFS= read -r line; do echo "      $line"; done
-
-rm -f "$TMP_KEY_DER"
-echo "  ✅ Private key imported to YubiKey slot ${SLOT}"
+    2>&1
+if [ $? -eq 0 ]; then
+  rm -f "$TMP_KEY_DER"
+  echo "  ✅ Private key imported to YubiKey slot ${SLOT}"
+else
+  echo "  ❌ Import failed (see above)"
+  exit 1
+fi
 
 # ── Step 6: Write certificate to YubiKey ───────────
 echo ""
