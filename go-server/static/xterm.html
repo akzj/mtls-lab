@@ -254,12 +254,6 @@ function app() {
                 term.focus();
             };
 
-            term.onData(function(data) {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(data);
-                }
-            });
-
             ws.onclose = function() {
                 term.write('\r\nConnection closed.\r\n');
             };
@@ -281,7 +275,7 @@ function app() {
             // Terminal → WebSocket
             term.onData(function(data) {
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(new TextEncoder().encode(data));
+                    ws.send(data);
                 }
             });
 
@@ -345,7 +339,7 @@ function app() {
 
             term.onData(function(data) {
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(new TextEncoder().encode(data));
+                    ws.send(data);
                 }
             });
 
