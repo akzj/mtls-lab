@@ -1,0 +1,8 @@
+.:53 {
+    hosts {
+        127.0.0.1 vault.lab.local auth.lab.local web.lab.local nginx.lab.local step-ca.lab.local
+    }
+    forward . 8.8.8.8 1.1.1.1
+    log
+    errors
+}

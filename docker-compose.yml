@@ -24,15 +24,31 @@ services:
     command: server -dev-tls -config=/vault/config/vault.hcl
     ports:
       - "8200:8200"
-      
     extra_hosts:
-      - "auth.local:host-gateway"
+      - "vault.lab.local:host-gateway"
+      - "auth.lab.local:host-gateway"
+      - "web.lab.local:host-gateway"
+      - "nginx.lab.local:host-gateway"      
     healthcheck:
       test: ["CMD-SHELL", "vault status -tls-skip-verify 2>&1; test $$? -le 2"]
       interval: 5s
       timeout: 10s
       retries: 20
       start_period: 10s
+
+  # ──────────────────────────────────────────────
+  # CoreDNS — DNS resolution for lab.local
+  # ──────────────────────────────────────────────
+  coredns:
+    image: coredns/coredns:latest
+    container_name: coredns
+    volumes:
+      - ./coredns/Corefile:/etc/coredns/Corefile:ro
+    ports:
+      - "5353:53/udp"
+      - "5353:53/tcp"
+    command: -conf /etc/coredns/Corefile
+    restart: unless-stopped
 
   # ──────────────────────────────────────────────
   # Vault Init — one-shot PKI + KV + SSH + cert auth
@@ -72,7 +88,10 @@ services:
     environment:
       - VAULT_ADDR=https://vault:8200
     extra_hosts:
-      - "auth.local:host-gateway"
+      - "vault.lab.local:host-gateway"
+      - "auth.lab.local:host-gateway"
+      - "web.lab.local:host-gateway"
+      - "nginx.lab.local:host-gateway"
     depends_on:
       vault-init:
         condition: service_completed_successfully

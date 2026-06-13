@@ -8,11 +8,11 @@ resource "vault_jwt_auth_backend" "oidc" {
   type               = "oidc"
   path               = "oidc"
   description        = "OIDC authentication via Authentik"
-  oidc_discovery_url = "http://auth.local:9000/application/o/vault/"
+  oidc_discovery_url = "http://auth.lab.local:9000/application/o/vault/"
   oidc_client_id     = "vault-client-id"
   oidc_client_secret = "vault-client-secret"
   default_role       = "dev"
-  bound_issuer       = "http://auth.local:9000/application/o/vault/"
+  bound_issuer       = "http://auth.lab.local:9000/application/o/vault/"
 }
 
 # ---------------------------------------------------------------------------
@@ -33,34 +33,34 @@ locals {
 }
 
 resource "vault_jwt_auth_backend_role" "admin" {
-  backend          = vault_jwt_auth_backend.oidc.path
-  role_name        = "admin"
-  bound_audiences  = ["vault-client-id"]
+  backend               = vault_jwt_auth_backend.oidc.path
+  role_name             = "admin"
+  bound_audiences       = ["vault-client-id"]
   allowed_redirect_uris = local.allowed_redirect_uris
-  user_claim       = "sub"
-  oidc_scopes      = ["openid"]
-  token_policies   = ["admin-policy"]
-  token_ttl        = 3600
+  user_claim            = "sub"
+  oidc_scopes           = ["openid"]
+  token_policies        = ["admin-policy"]
+  token_ttl             = 3600
 }
 
 resource "vault_jwt_auth_backend_role" "ops" {
-  backend          = vault_jwt_auth_backend.oidc.path
-  role_name        = "ops"
-  bound_audiences  = ["vault-client-id"]
+  backend               = vault_jwt_auth_backend.oidc.path
+  role_name             = "ops"
+  bound_audiences       = ["vault-client-id"]
   allowed_redirect_uris = local.allowed_redirect_uris
-  user_claim       = "sub"
-  oidc_scopes      = ["openid"]
-  token_policies   = ["ops-policy"]
-  token_ttl        = 3600
+  user_claim            = "sub"
+  oidc_scopes           = ["openid"]
+  token_policies        = ["ops-policy"]
+  token_ttl             = 3600
 }
 
 resource "vault_jwt_auth_backend_role" "dev" {
-  backend          = vault_jwt_auth_backend.oidc.path
-  role_name        = "dev"
-  bound_audiences  = ["vault-client-id"]
+  backend               = vault_jwt_auth_backend.oidc.path
+  role_name             = "dev"
+  bound_audiences       = ["vault-client-id"]
   allowed_redirect_uris = local.allowed_redirect_uris
-  user_claim       = "sub"
-  oidc_scopes      = ["openid"]
-  token_policies   = ["dev-policy"]
-  token_ttl        = 3600
+  user_claim            = "sub"
+  oidc_scopes           = ["openid"]
+  token_policies        = ["dev-policy"]
+  token_ttl             = 3600
 }
