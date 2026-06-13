@@ -33,6 +33,7 @@ ROOT_CA_DIR="${PROJECT_DIR}/root-ca"
 # YubiKey configuration
 SLOT="9c"                        # Digital Signature slot
 PIN="123123"
+MGMT_KEY="010203040506070801020304050607080102030405060708"
 SUBJECT="/CN=Zero-FAS Root CA"
 VALID_DAYS=3650                   # ~10 years
 SERIAL="0x01"
@@ -145,7 +146,7 @@ echo "[5/6] Importing private key to YubiKey PIV slot ${SLOT}..."
 echo "      (Key already backed up at: ${KEY_PEM})"
 
 # Convert PEM key to DER for YubiKey import
-TMP_KEY_DER=$(mktemp)
+TMP_KEY_DER=$(mktemp /tmp/root-ca-key.XXXXXXXXXX.der)
 openssl pkcs8 -topk8 -nocrypt -in "$KEY_PEM" -outform DER -out "$TMP_KEY_DER" 2>/dev/null
 
 # Check if slot 9c already has a key
@@ -156,7 +157,7 @@ fi
 yubico-piv-tool -s "$SLOT" \
     -i "$TMP_KEY_DER" \
     -a import-key \
-    -P "$PIN" \
+    -k "$MGMT_KEY" \
     --algorithm RSA2048 \
     2>&1 | while IFS= read -r line; do echo "      $line"; done
 
