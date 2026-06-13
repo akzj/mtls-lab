@@ -120,6 +120,17 @@ func (ss *SessionStore) GetUser(sessionID string) string {
 	return ""
 }
 
+// GetGroups returns the groups for a session ID
+func (ss *SessionStore) GetGroups(sessionID string) []string {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	if session, ok := ss.sessions[sessionID]; ok {
+		return session.Groups
+	}
+	return nil
+}
+
 func generateSessionID() string {
 	b := make([]byte, 32)
 	rand.Read(b)
@@ -130,6 +141,53 @@ func generateState() string {
 	b := make([]byte, 32)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
+}
+
+// ===== RBAC (Role-Based Access Control) =====
+
+// RBACConfig defines which groups can access which resources
+type RBACConfig struct {
+	AllowedGroups map[string][]string
+}
+
+var rbacConfig = RBACConfig{
+	AllowedGroups: map[string][]string{
+		"devices:view":     {"admin-group", "ops-group", "dev-group"},
+		"devices:view_all": {"admin-group", "ops-group"},
+		"dc2:access":       {"admin-group"},
+		"tunnel:create":    {"admin-group", "ops-group"},
+		"tunnel:view":      {"admin-group", "ops-group", "dev-group"},
+		"shell:dc1":        {"admin-group", "ops-group", "dev-group"},
+		"shell:dc2":        {"admin-group"},
+	},
+}
+
+// hasGroup checks if user's groups contain at least one of the required groups
+func hasGroup(userGroups, requiredGroups []string) bool {
+	for _, ug := range userGroups {
+		for _, rg := range requiredGroups {
+			if ug == rg {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// checkRBAC checks if the request has permission for the given resource
+func checkRBAC(r *http.Request, resource string) bool {
+	cookie, err := r.Cookie("session_id")
+	if err != nil {
+		return false
+	}
+
+	userGroups := sessionStore.GetGroups(cookie.Value)
+	allowed, exists := rbacConfig.AllowedGroups[resource]
+	if !exists {
+		return false
+	}
+
+	return hasGroup(userGroups, allowed)
 }
 
 func main() {
@@ -227,6 +285,13 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// RBAC: tunnel creation requires admin or ops group
+		if !checkRBAC(r, "tunnel:create") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"forbidden","message":"Only admins and ops can create tunnels"}`))
+			return
+		}
 		tunnelMgr.handleCreateTunnel(w, r)
 	})
 
@@ -281,6 +346,17 @@ func main() {
 		if !sessionCheck(r) {
 			http.Redirect(w, r, "/auth/login", http.StatusFound)
 			return
+		}
+		// RBAC: DC2 requires admin group
+		dc := r.URL.Query().Get("dc")
+		if dc == "2" && !checkRBAC(r, "shell:dc2") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"forbidden","message":"DC2 access requires admin group"}`))
+			return
+		}
+		if cookie, err := r.Cookie("session_id"); err == nil {
+			r.Header.Set("X-User", sessionStore.GetUser(cookie.Value))
 		}
 		shellHandler(w, r, vaultAddr, vaultToken)
 	})
@@ -1255,7 +1331,7 @@ func oidcLogoutHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "http://auth.lab.local:9000/application/o/go-server/end-session/", http.StatusFound)
 }
 
-// sessionHandler returns the current session status
+// sessionHandler returns the current session status including groups
 func sessionHandler(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"authenticated": false,
@@ -1264,9 +1340,11 @@ func sessionHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session_id")
 	if err == nil && sessionStore.IsValid(cookie.Value) {
 		user := sessionStore.GetUser(cookie.Value)
+		groups := sessionStore.GetGroups(cookie.Value)
 		if user != "" {
 			resp["authenticated"] = true
 			resp["user"] = user
+			resp["groups"] = groups
 		}
 	}
 
