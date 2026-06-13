@@ -526,6 +526,7 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 					continue
 				}
 			}
+			log.Printf("WS→SSH: %d bytes", len(message))
 			stdin.Write(message)
 		}
 	}()
@@ -1080,6 +1081,7 @@ func deviceShellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vault
 					continue
 				}
 			}
+			log.Printf("WS→SSH: %d bytes", len(message))
 			stdin.Write(message)
 		}
 	}()
