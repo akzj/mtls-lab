@@ -1117,7 +1117,10 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
 	// Exchange auth code for token
-	oauth2Token, err := oauthConfig.Exchange(ctx, r.URL.Query().Get("code"))
+	code := r.URL.Query().Get("code")
+	log.Printf("OIDC token exchange: code=%s..., redirect_uri=%s, client_id=%s", 
+		code[:min(len(code),8)], oauthConfig.RedirectURL, oauthConfig.ClientID)
+	oauth2Token, err := oauthConfig.Exchange(ctx, code)
 	if err != nil {
 		log.Printf("OIDC token exchange error: %v", err)
 		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
@@ -1152,8 +1155,34 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Try UserInfo endpoint for more user details
+	userInfo, err := oidcProvider.UserInfo(ctx, oauth2.StaticTokenSource(oauth2Token))
+	if err == nil {
+		var uiClaims struct {
+			Name  string `json:"name"`
+			Email string `json:"email"`
+		}
+		if err := userInfo.Claims(&uiClaims); err == nil {
+			if uiClaims.Name != "" {
+				claims.Name = uiClaims.Name
+			}
+			if uiClaims.Email != "" {
+				claims.Email = uiClaims.Email
+			}
+		}
+	}
+
+	// Use email or sub as fallback username when name is empty
+	username := claims.Name
+	if username == "" {
+		username = claims.Email
+	}
+	if username == "" {
+		username = claims.Sub
+	}
+
 	// Create session
-	session := sessionStore.Create(claims.Name, claims.Email, claims.Groups)
+	session := sessionStore.Create(username, claims.Email, claims.Groups)
 
 	// Set cookie
 	http.SetCookie(w, &http.Cookie{

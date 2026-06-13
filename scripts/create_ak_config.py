@@ -22,6 +22,8 @@ for name in ['admin-group', 'ops-group', 'dev-group']:
 for username, group_name, password in [('admin','admin-group','123123'),('ops','ops-group','123123'),('dev','dev-group','123123')]:
     user, _ = User.objects.get_or_create(username=username)
     user.set_password(password)
+    user.name = username
+    user.email = f'{username}@lab.local'
     user.ak_groups.add(Group.objects.get(name=group_name))
     user.save()
     print(f"User: {username}")
