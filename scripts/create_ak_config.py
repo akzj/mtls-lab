@@ -103,6 +103,11 @@ if auth_flow:
     )
     print(f"OIDC Provider: {go_prov.name}")
 
+    if key and not go_prov.signing_key:
+        go_prov.signing_key = key
+        go_prov.save()
+        print(f"Signing key: {key.name}")
+
     go_app, _ = Application.objects.get_or_create(
         slug='go-server',
         defaults={'name': 'Go Server', 'provider': go_prov, 'meta_launch_url': 'http://localhost:9091/'},
