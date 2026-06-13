@@ -9,7 +9,7 @@ RUN go build -o client .
 # Final runtime image
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates openssh openssh-server openssh-sftp-server
-RUN adduser -D -s /bin/ash gateway-user
+RUN adduser -D -s /bin/ash gateway-user && passwd -u gateway-user
 RUN ssh-keygen -A
 
 WORKDIR /app

@@ -419,23 +419,9 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 		return
 	}
 
-	// Step 3: Parse the signed certificate
-	parsedCert, _, _, _, err := ssh.ParseAuthorizedKey([]byte(signedKeyStr))
-	if err != nil {
-		log.Printf("Failed to parse SSH cert: %v", err)
-		sendWSMessage(conn, "Failed to parse SSH certificate")
-		return
-	}
-
-	cert, ok := parsedCert.(*ssh.Certificate)
-	if !ok {
-		log.Printf("Parsed key is not a certificate")
-		sendWSMessage(conn, "Parsed key is not a certificate")
-		return
-	}
 	log.Printf("Shell SSH dial succeeded, creating session...")
 
-	// Create an SSH signer from the private key
+	// Try Ed25519 key first (pre-deployed), fall back to signed certificate
 	keySigner, err := ssh.NewSignerFromKey(sshKey)
 	if err != nil {
 		log.Printf("Failed to create key signer: %v", err)
@@ -443,19 +429,34 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 		return
 	}
 
-	// Create a signer with the certificate
-	certSigner, err := ssh.NewCertSigner(cert, keySigner)
-	if err != nil {
-		log.Printf("Failed to create cert signer: %v", err)
-		sendWSMessage(conn, "Failed to create SSH cert signer")
-		return
+	// Try pre-deployed Ed25519 key first
+	sshAuthMethod := ssh.PublicKeys(keySigner)
+	keyBytes, readErr := os.ReadFile("/app/keys/ssh-key")
+	if readErr == nil {
+		loadedKey, parseErr := ssh.ParsePrivateKey(keyBytes)
+		if parseErr == nil {
+			log.Printf("Using Ed25519 key for SSH auth")
+			sshAuthMethod = ssh.PublicKeys(loadedKey)
+		}
+	} else {
+		// Fall back to certificate
+		parsedCert, _, _, _, parseErr := ssh.ParseAuthorizedKey([]byte(signedKeyStr))
+		if parseErr == nil {
+			if cert, ok := parsedCert.(*ssh.Certificate); ok {
+				certSigner, signErr := ssh.NewCertSigner(cert, keySigner)
+				if signErr == nil {
+					log.Printf("Using signed cert for SSH auth")
+					sshAuthMethod = ssh.PublicKeys(certSigner)
+				}
+			}
+		}
 	}
 
 	// Step 4: Connect to SSH server (DC-aware target)
 	sshConfig := &ssh.ClientConfig{
 		User: sshUser,
 		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(certSigner),
+			sshAuthMethod,
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         10 * time.Second,
