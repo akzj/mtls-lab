@@ -252,6 +252,12 @@ func main() {
 	// OIDC callback endpoint (public)
 	httpMux.HandleFunc("/auth/callback", oidcCallbackHandler)
 
+	// OIDC logout endpoint (public, clears session)
+	httpMux.HandleFunc("/auth/logout", oidcLogoutHandler)
+
+	// Session status API (public, returns auth status)
+	httpMux.HandleFunc("/api/session", sessionHandler)
+
 	// Health check (public)
 	httpMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
@@ -1171,6 +1177,37 @@ func sessionCheck(r *http.Request) bool {
 		return false
 	}
 	return sessionStore.IsValid(cookie.Value)
+}
+
+// oidcLogoutHandler clears the session and redirects to Authentik
+func oidcLogoutHandler(w http.ResponseWriter, r *http.Request) {
+	// Clear session cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_id",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+
+	// Redirect to Authentik end-session endpoint
+	http.Redirect(w, r, "http://auth.lab.local:9000/application/o/go-server/end-session/", http.StatusFound)
+}
+
+// sessionHandler returns the current session status
+func sessionHandler(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]interface{}{
+		"authenticated": false,
+	}
+
+	cookie, err := r.Cookie("session_id")
+	if err == nil && sessionStore.IsValid(cookie.Value) {
+		resp["authenticated"] = true
+		resp["user"] = sessionStore.GetUser(cookie.Value)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // ──────────────────────────────────────────────

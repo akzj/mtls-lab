@@ -135,6 +135,11 @@
         <div class="header">
             <span class="title" id="terminal-title">Zero-FAS Terminal</span>
             <span class="status" id="status">connecting...</span>
+            <div style="display:flex;align-items:center;gap:10px;">
+                <span style="color:#4ecca3;font-size:12px;" id="user-info">loading...</span>
+                <a href="/auth/logout" style="color:#e94560;font-size:12px;text-decoration:none;display:none;" id="logout-btn">Logout</a>
+                <a href="/auth/login" style="color:#4ecca3;font-size:12px;text-decoration:none;display:none;" id="login-btn">Login</a>
+            </div>
         </div>
         <div id="output"></div>
         <div id="input-line">
@@ -437,6 +442,25 @@
         div.textContent = str;
         return div.innerHTML;
     }
+
+    // Session check
+    fetch('/api/session')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.authenticated) {
+                document.getElementById('user-info').textContent = '👤 ' + data.user;
+                document.getElementById('logout-btn').style.display = 'inline';
+                document.getElementById('login-btn').style.display = 'none';
+            } else {
+                document.getElementById('user-info').textContent = 'not logged in';
+                document.getElementById('logout-btn').style.display = 'none';
+                document.getElementById('login-btn').style.display = 'inline';
+            }
+        })
+        .catch(function() {
+            document.getElementById('user-info').textContent = 'not logged in';
+            document.getElementById('login-btn').style.display = 'inline';
+        });
 
     // Initial load + periodic refresh
     fetchDevices();
