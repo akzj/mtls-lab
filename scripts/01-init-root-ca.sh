@@ -145,22 +145,14 @@ echo ""
 echo "[5/6] Importing private key to YubiKey PIV slot ${SLOT}..."
 echo "      (Key already backed up at: ${KEY_PEM})"
 
-# Convert PEM key to DER for YubiKey import
-TMP_KEY_DER=$(mktemp /tmp/root-ca-key.XXXXXXXXXX)
-openssl pkcs8 -topk8 -nocrypt -in "$KEY_PEM" -outform DER -out "$TMP_KEY_DER"
-
+# Import private key to YubiKey using ykman (supports overwriting)
 # Check if slot 9c already has a key
-if yubico-piv-tool -s "$SLOT" -a status 2>&1 | grep -q "Algorithm"; then
+if ykman piv keys info -s "$SLOT" 2>&1 | grep -q "Algorithm"; then
     echo "  ⚠️  Slot ${SLOT} already contains a key. Overwriting..."
 fi
 
-yubico-piv-tool -s "$SLOT" \
-    -i "$TMP_KEY_DER" \
-    -k "$MGMT_KEY" \
-    -a import-key \
-    2>&1
+ykman piv keys import -m "$MGMT_KEY" "$SLOT" "$KEY_PEM" 2>&1
 if [ $? -eq 0 ]; then
-  rm -f "$TMP_KEY_DER"
   echo "  ✅ Private key imported to YubiKey slot ${SLOT}"
 else
   echo "  ❌ Import failed (see above)"
@@ -171,11 +163,7 @@ fi
 echo ""
 echo "[6/6] Writing certificate to YubiKey..."
 
-yubico-piv-tool -s "$SLOT" \
-    -a import-certificate \
-    -i "$CERT_DER" \
-    -P "$PIN" \
-    2>&1 | while IFS= read -r line; do echo "      $line"; done
+ykman piv certificates import -m "$MGMT_KEY" "$SLOT" "$CERT_PEM" 2>&1 | while IFS= read -r line; do echo "      $line"; done
 
 echo "  ✅ Certificate written to YubiKey slot ${SLOT}"
 
