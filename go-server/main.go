@@ -493,7 +493,7 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 	stderr, _ := session.StderrPipe()
 
 	// Start shell
-		if err := session.Start("/bin/sh -i"); err != nil {
+		if err := session.Shell(); err != nil {
 		log.Printf("SSH shell error: %v", err)
 		sendWSMessage(conn, "Failed to start SSH shell")
 		return
