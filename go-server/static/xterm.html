@@ -3,468 +3,355 @@
 <head>
     <meta charset="utf-8">
     <title>Zero-FAS Terminal</title>
-    <style>
-        body { background: #1a1a2e; color: #e0e0e0; font-family: monospace; margin: 0; padding: 16px; }
-        #output {
-            background: #0d0d1a; border: 1px solid #333; padding: 12px;
-            height: 55vh; overflow-y: auto; white-space: pre-wrap;
-            font-size: 14px; line-height: 1.4;
-        }
-        #input-line { display: flex; margin-top: 8px; }
-        #prompt { color: #4ecca3; padding-right: 8px; }
-        #input {
-            background: #0d0d1a; border: 1px solid #333; color: #e0e0e0;
-            font-family: monospace; font-size: 14px; flex: 1; padding: 8px;
-            outline: none;
-        }
-        #input:focus { border-color: #e94560; }
-        #status { color: #f0c040; margin-bottom: 8px; font-size: 12px; }
-        .header { margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
-        .header .title { color: #e94560; font-weight: bold; }
-        .header .status { color: #4ecca3; font-size: 12px; }
-
-        /* Tunnel Panel */
-        #tunnel-btn {
-            position: fixed; right: 5px; top: 40px; z-index: 100;
-            background: #0f3460; color: #e94560; border: 1px solid #e94560;
-            padding: 4px 8px; cursor: pointer; font-size: 12px;
-        }
-        #tunnel-btn:hover { background: #16213e; }
-        #tunnel-panel {
-            position: fixed; right: 0; top: 0; width: 300px; height: 100vh;
-            background: #16213e; color: #e0e0e0; font-family: monospace;
-            padding: 10px; border-left: 1px solid #0f3460;
-            overflow-y: auto; display: none; z-index: 99;
-        }
-        #tunnel-panel h3 { color: #e94560; margin: 0 0 10px 0; font-size: 14px; }
-        #tunnel-panel input, #tunnel-panel button {
-            width: 100%; margin: 4px 0; padding: 6px; box-sizing: border-box;
-        }
-        #tunnel-panel input {
-            background: #1a1a2e; color: #e0e0e0; border: 1px solid #0f3460; font-family: monospace; font-size: 12px;
-        }
-        #tunnel-panel button {
-            background: #e94560; color: white; border: none; cursor: pointer; font-family: monospace; font-size: 12px;
-        }
-        #tunnel-panel button:hover { background: #d63851; }
-        .tunnel-item {
-            background: #1a1a2e; border: 1px solid #0f3460; padding: 8px; margin: 6px 0; font-size: 11px;
-        }
-        .tunnel-item .t-name { color: #4ecca3; font-weight: bold; }
-        .tunnel-item .t-url { color: #e94560; }
-        .tunnel-item .t-status { font-size: 10px; }
-        .tunnel-item .t-status.active { color: #4ecca3; }
-        .tunnel-item .t-status.error { color: #e94560; }
-        #tunnel-error { color: #e94560; font-size: 11px; margin-top: 4px; display: none; }
-
-        /* DC Selection Screen */
-        #dc-select-screen {
-            display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
-            min-height: 100vh; background: #1a1a2e; color: #e0e0e0; font-family: monospace;
-            padding: 40px 20px;
-        }
-        #dc-select-screen h2 { color: #e94560; margin-bottom: 10px; font-size: 28px; }
-        #dc-select-screen p { color: #4ecca3; margin-bottom: 24px; font-size: 14px; }
-        .dc-cards { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; margin-bottom: 40px; }
-        .dc-card {
-            background: #16213e; border: 2px solid #0f3460; border-radius: 12px;
-            padding: 36px 30px; width: 220px; text-align: center; cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .dc-card:hover { border-color: #e94560; transform: translateY(-4px); box-shadow: 0 8px 24px rgba(233,69,96,0.15); }
-        .dc-card .dc-icon { font-size: 48px; margin-bottom: 12px; }
-        .dc-card h3 { color: #e94560; margin: 0 0 4px 0; font-size: 18px; }
-        .dc-card .dc-desc { color: #4ecca3; font-size: 11px; margin: 0; }
-        .dc-card .dc-detail { color: #888; font-size: 10px; margin-top: 8px; }
-        /* Device List */
-        .section-title { color: #e94560; font-size: 16px; margin: 0 0 16px 0; width: 100%; text-align: center; }
-        #device-list { width: 100%; max-width: 600px; }
-        .device-item {
-            display: flex; align-items: center; padding: 10px 14px; margin: 6px 0;
-            background: #16213e; border-radius: 8px; border: 1px solid #0f3460; font-size: 13px;
-        }
-        .device-item .dev-status { margin-right: 10px; font-size: 16px; }
-        .device-item .dev-info { flex: 1; }
-        .device-item .dev-info .dev-name { color: #4ecca3; font-weight: bold; }
-        .device-item .dev-info .dev-meta { color: #888; font-size: 11px; }
-        .device-item .dev-ssh-btn {
-            background: #e94560; color: white; border: none; padding: 5px 14px;
-            border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 12px;
-        }
-        .device-item .dev-ssh-btn:hover { background: #d63851; }
-        .device-item .dev-ssh-btn:disabled { background: #555; cursor: not-allowed; }
-        .loading-text { color: #4ecca3; font-size: 12px; text-align: center; width: 100%; }
-        /* Back button */
-        #back-btn {
-            position: fixed; right: 50px; top: 5px; z-index: 100;
-            background: #0f3460; color: white; border: 1px solid #e94560;
-            padding: 2px 8px; cursor: pointer; font-size: 11px; font-family: monospace;
-        }
-        #back-btn:hover { background: #16213e; }
-    </style>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- Axios -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <!-- xterm.js -->
+    <link href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
 </head>
-<body>
-    <!-- DC Selection Screen -->
-    <div id="dc-select-screen">
-        <h2>🔐 Zero-FAS Lab</h2>
-        <p>Select a datacenter to connect:</p>
-        <div class="dc-cards">
-            <div class="dc-card" onclick="connectDC('1')">
-                <div class="dc-icon">🏢</div>
-                <h3>Datacenter DC1</h3>
-                <p class="dc-desc">gateway:22</p>
-                <p class="dc-detail">Vault SSH CA: ssh/</p>
+<body class="bg-[#1a1a2e] text-gray-200 font-mono m-0 p-0 overflow-hidden h-screen">
+
+<div x-data="app()">
+    <!-- ===== Header Bar ===== -->
+    <div class="bg-[#16213e] border-b border-[#0f3460] px-4 py-2 flex justify-between items-center">
+        <span class="text-[#e94560] font-bold text-sm">Zero-FAS Lab Terminal</span>
+        <div class="flex items-center gap-3">
+            <span x-show="authenticated" class="text-[#4ecca3] text-xs">👤 <span x-text="user"></span></span>
+            <a x-show="authenticated" href="/auth/logout" class="text-[#e94560] text-xs hover:underline">Logout</a>
+            <a x-show="!authenticated" href="/auth/login" class="text-[#4ecca3] text-xs hover:underline">Login</a>
+        </div>
+    </div>
+
+    <!-- ===== DC Selection Screen ===== -->
+    <div x-show="screen === 'dc-select'" class="flex flex-col items-center justify-center h-[calc(100vh-40px)] px-4">
+        <h2 class="text-[#e94560] text-2xl mb-4">🔐 Zero-FAS Lab</h2>
+        <p class="text-[#4ecca3] mb-8 text-sm">Select a datacenter or device to connect:</p>
+
+        <!-- DC Cards -->
+        <div class="flex gap-6 mb-10 flex-wrap justify-center">
+            <div @click="connectDC('1')"
+                class="bg-[#16213e] border-2 border-[#0f3460] rounded-xl p-8 w-56 text-center cursor-pointer
+                       hover:border-[#e94560] hover:-translate-y-1 hover:shadow-lg hover:shadow-[#e94560]/10 transition-all duration-200">
+                <div class="text-5xl mb-3">🏢</div>
+                <h3 class="text-[#e94560] font-bold text-lg">Datacenter DC1</h3>
+                <p class="text-[#4ecca3] text-xs mt-1">gateway:22</p>
+                <p class="text-gray-500 text-2xs mt-2">Vault SSH CA: ssh/</p>
             </div>
-            <div class="dc-card" onclick="connectDC('2')">
-                <div class="dc-icon">🏭</div>
-                <h3>Datacenter DC2</h3>
-                <p class="dc-desc">gateway-dc2:22</p>
-                <p class="dc-detail">Vault SSH CA: ssh-dc2/</p>
+            <div @click="connectDC('2')"
+                class="bg-[#16213e] border-2 border-[#0f3460] rounded-xl p-8 w-56 text-center cursor-pointer
+                       hover:border-[#e94560] hover:-translate-y-1 hover:shadow-lg hover:shadow-[#e94560]/10 transition-all duration-200">
+                <div class="text-5xl mb-3">🏭</div>
+                <h3 class="text-[#e94560] font-bold text-lg">Datacenter DC2</h3>
+                <p class="text-[#4ecca3] text-xs mt-1">gateway-dc2:22</p>
+                <p class="text-gray-500 text-2xs mt-2">Vault SSH CA: ssh-dc2/</p>
             </div>
         </div>
 
         <!-- Device List -->
-        <h3 class="section-title" style="margin-top:20px;">📡 Registered Devices</h3>
-        <div id="device-list">
-            <div class="loading-text">Loading devices...</div>
+        <div class="w-full max-w-lg">
+            <h4 class="text-gray-400 text-xs mb-3 text-center">📡 Registered Devices</h4>
+            <template x-for="d in devices" :key="d.id">
+                <div class="flex items-center gap-3 bg-[#16213e] rounded-lg px-4 py-3 mb-2 border border-[#0f3460]">
+                    <span x-text="d.online ? '🟢' : '🔴'" class="text-sm"></span>
+                    <div class="flex-1 min-w-0">
+                        <div class="text-[#4ecca3] text-sm font-bold truncate" x-text="d.id"></div>
+                        <div class="text-gray-400 text-2xs truncate" x-text="d.label + ' | DC' + d.dc + ' | ' + d.ssh_target"></div>
+                    </div>
+                    <button @click="sshToDevice(d.id)"
+                        :disabled="!d.online"
+                        :class="d.online ? 'bg-[#e94560] hover:bg-[#d63851] cursor-pointer' : 'bg-gray-600 cursor-not-allowed'"
+                        class="text-white text-xs px-3 py-1.5 rounded border-0 transition-colors whitespace-nowrap">SSH</button>
+                </div>
+            </template>
+            <div x-show="devices.length === 0" class="text-gray-500 text-xs text-center py-4">No devices registered yet.</div>
         </div>
     </div>
 
-    <!-- Terminal Container (hidden until DC selected) -->
-    <div id="terminal-container" style="display:none;">
-        <div class="header">
-            <span class="title" id="terminal-title">Zero-FAS Terminal</span>
-            <span class="status" id="status">connecting...</span>
-            <div style="display:flex;align-items:center;gap:10px;">
-                <span style="color:#4ecca3;font-size:12px;" id="user-info">loading...</span>
-                <a href="/auth/logout" style="color:#e94560;font-size:12px;text-decoration:none;display:none;" id="logout-btn">Logout</a>
-                <a href="/auth/login" style="color:#4ecca3;font-size:12px;text-decoration:none;display:none;" id="login-btn">Login</a>
+    <!-- ===== Terminal Screen ===== -->
+    <div x-show="screen === 'terminal'" class="h-[calc(100vh-40px)] relative">
+        <div id="terminal" class="h-full w-full"></div>
+
+        <!-- Back to DC select -->
+        <button @click="backToSelect()"
+            class="fixed top-1 left-2 z-50 bg-[#0f3460] text-white border border-[#e94560] rounded px-2 py-0.5 cursor-pointer text-2xs hover:bg-[#16213e]">
+            ⬅ Back
+        </button>
+
+        <!-- Tunnel toggle button -->
+        <button @click="toggleTunnel()"
+            class="fixed top-1 right-2 z-50 bg-[#0f3460] text-[#e94560] border border-[#e94560] rounded px-2 py-1 cursor-pointer text-base hover:bg-[#16213e]">
+            🔌
+        </button>
+
+        <!-- Tunnel sidebar -->
+        <div :class="tunnelOpen ? 'right-0' : '-right-80'"
+            class="fixed top-10 w-72 h-[calc(100vh-40px)] bg-[#16213e] border-l border-[#0f3460] p-3 overflow-y-auto z-40 transition-all duration-300">
+            <h3 class="text-[#e94560] text-sm font-bold mb-3">🔌 Tunnels</h3>
+
+            <!-- Input form -->
+            <div class="flex gap-1 mb-3 flex-wrap">
+                <input x-model="tunnelHost" placeholder="Host" value="internal-app"
+                    class="flex-1 min-w-0 bg-[#1a1a2e] text-gray-200 border border-[#0f3460] rounded px-2 py-1 text-xs">
+                <input x-model="tunnelPort" placeholder="Port" value="80"
+                    class="w-14 bg-[#1a1a2e] text-gray-200 border border-[#0f3460] rounded px-2 py-1 text-xs">
+                <input x-model="tunnelDesc" placeholder="Desc" value="app"
+                    class="w-16 bg-[#1a1a2e] text-gray-200 border border-[#0f3460] rounded px-2 py-1 text-xs">
+                <button @click="createTunnel()"
+                    class="bg-[#e94560] text-white px-2 py-1 rounded text-xs border-0 cursor-pointer hover:bg-[#d63851] whitespace-nowrap">➕ Add</button>
             </div>
-        </div>
-        <div id="output"></div>
-        <div id="input-line">
-            <span id="prompt">$</span>
-            <input type="text" id="input" placeholder="Type command and press Enter..." autofocus disabled>
-        </div>
 
-    </div> <!-- end terminal-container -->
+            <!-- Tunnel error -->
+            <div x-show="tunnelError" x-text="tunnelError" class="text-[#e94560] text-2xs mb-2"></div>
 
-    <!-- Tunnel toggle button -->
-    <button id="tunnel-btn" onclick="toggleTunnelPanel()">🔌</button>
-    <button id="back-btn" onclick="location.reload()">⬅ Back to DC select</button>
-
-    <!-- Tunnel panel -->
-    <div id="tunnel-panel">
-        <h3>🔌 Tunnels</h3>
-        <div>
-            <input id="tunnel-host" placeholder="Target Host" value="internal-app">
-            <input id="tunnel-port" placeholder="Target Port" value="80">
-            <input id="tunnel-desc" placeholder="Description" value="internal-app web">
-            <button onclick="createTunnel()">Create Tunnel</button>
-            <div id="tunnel-error"></div>
+            <!-- Tunnel list -->
+            <template x-for="t in tunnels" :key="t.id">
+                <div class="bg-[#1a1a2e] border border-[#0f3460] rounded-lg p-2.5 mb-2 flex justify-between items-center">
+                    <div class="flex-1 min-w-0">
+                        <div class="text-[#4ecca3] text-xs font-bold truncate" x-text="t.description"></div>
+                        <div class="text-gray-400 text-2xs" x-text="t.target_host + ':' + t.target_port"></div>
+                    </div>
+                    <div class="flex items-center gap-2 ml-2 shrink-0">
+                        <span :class="t.status === 'active' ? 'bg-green-900 text-green-300 border-green-500' : 'bg-red-900 text-red-300 border-red-500'"
+                            class="px-2 py-0.5 rounded-full text-2xs border" x-text="t.status"></span>
+                        <a :href="t.url" target="_blank" class="text-[#e94560] text-xs no-underline hover:underline">↗</a>
+                    </div>
+                </div>
+            </template>
+            <div x-show="tunnels.length === 0" class="text-gray-500 text-2xs text-center py-2">No tunnels</div>
         </div>
-        <div id="tunnel-list" style="margin-top:10px;"></div>
     </div>
+</div>
 
-    <script>
-    // WebSocket connection (established when user selects a DC)
-    var ws = null;
-    var termActive = false;
-    var outputEl = document.getElementById('output');
-    var inputEl = document.getElementById('input');
-    var statusEl = document.getElementById('status');
-    var promptEl = document.getElementById('prompt');
-    var terminalTitle = document.getElementById('terminal-title');
+<script>
+// ===== Alpine.js Root Application =====
+function app() {
+    return {
+        screen: 'dc-select',
+        authenticated: false,
+        user: null,
+        devices: [],
+        tunnels: [],
+        tunnelOpen: false,
+        tunnelHost: 'internal-app',
+        tunnelPort: '80',
+        tunnelDesc: 'app',
+        tunnelError: '',
+        ws: null,
+        term: null,
+        fitAddon: null,
 
-    function log(text) {
-        outputEl.textContent += text;
-        outputEl.scrollTop = outputEl.scrollHeight;
-    }
-
-    function setStatus(text, isError) {
-        statusEl.textContent = text;
-        statusEl.style.color = isError ? '#e94560' : '#4ecca3';
-    }
-
-    // Called when user clicks a DC card
-    function connectDC(dc) {
-        // Show terminal, hide DC select
-        document.getElementById('dc-select-screen').style.display = 'none';
-        document.getElementById('terminal-container').style.display = 'block';
-
-        // Update title
-        var name = dc === '2' ? 'DC2 gateway-dc2' : 'DC1 gateway';
-        terminalTitle.textContent = 'Zero-FAS Terminal — ' + name + ' (Vault SSH CA)';
-
-        // Connect WebSocket
-        var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var wsUrl = protocol + '//' + window.location.host + '/shell?dc=' + dc;
-
-        log('Connecting to ' + wsUrl + '...\n');
-        setStatus('connecting via Vault SSH CA (DC' + dc + ')...');
-
-        try {
-            ws = new WebSocket(wsUrl);
-        } catch (e) {
-            setStatus('❌ WebSocket error: ' + e.message, true);
-            log('ERROR: ' + e.message + '\n');
-            return;
-        }
-
-        ws.onopen = function() {
-            setStatus('✅ SSH connected to DC' + dc + ' — type a command and press Enter');
-            promptEl.textContent = 'gateway-user@' + (dc === '2' ? 'gateway-dc2' : 'gateway') + ':~$';
-            inputEl.disabled = false;
-            inputEl.focus();
-            log('Connected! SSH session established via DC' + dc + '.\n');
-            termActive = true;
-        };
-
-        ws.onclose = function(e) {
-            setStatus('❌ Disconnected from DC' + dc + ' (code: ' + e.code + ')', true);
-            inputEl.disabled = true;
-            termActive = false;
-            log('\nConnection closed.\n');
-        };
-
-        ws.onerror = function() {
-            setStatus('❌ WebSocket error', true);
-            inputEl.disabled = true;
-            termActive = false;
-            log('ERROR: WebSocket connection failed.\n');
-        };
-
-        ws.onmessage = function(event) {
-            if (event.data instanceof Blob) {
-                var reader = new FileReader();
-                reader.onload = function() {
-                    log(reader.result);
-                };
-                reader.readAsText(event.data);
-            } else {
-                log(event.data);
-            }
-        };
-
-        // Handle Enter key in input
-        inputEl.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                var cmd = inputEl.value;
-                inputEl.value = '';
-                log(cmd + '\n');
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(new TextEncoder().encode(cmd + '\n'));
+        init() {
+            // Check session
+            axios.get('/api/session').then(resp => {
+                if (resp.data.authenticated) {
+                    this.authenticated = true;
+                    this.user = resp.data.user;
                 }
+            }).catch(() => {});
+
+            // Fetch devices
+            this.fetchDevices();
+            setInterval(() => this.fetchDevices(), 10000);
+        },
+
+        fetchDevices() {
+            axios.get('/api/devices').then(resp => {
+                this.devices = resp.data || [];
+            }).catch(() => {});
+        },
+
+        connectDC(dc) {
+            this.screen = 'terminal';
+            this.$nextTick(() => this.initTerminal(dc));
+        },
+
+        sshToDevice(deviceId) {
+            this.screen = 'terminal';
+            this.$nextTick(() => this.initDeviceSSH(deviceId));
+        },
+
+        backToSelect() {
+            // Clean up existing terminal
+            if (this.ws) {
+                this.ws.close();
+                this.ws = null;
             }
-        });
-
-        // Resize
-        window.addEventListener('resize', function() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'resize', cols: 80, rows: 24 }));
+            if (this.term) {
+                this.term.dispose();
+                this.term = null;
+                this.fitAddon = null;
             }
-        });
+            this.screen = 'dc-select';
+        },
 
-        console.log('Terminal connected to DC' + dc);
-    }
+        toggleTunnel() {
+            this.tunnelOpen = !this.tunnelOpen;
+        },
 
-    // ── Device List ──
+        createTunnel() {
+            var host = this.tunnelHost;
+            var port = parseInt(this.tunnelPort);
+            var desc = this.tunnelDesc;
 
-    function fetchDevices() {
-        fetch('/api/devices')
-            .then(function(r) { return r.json(); })
-            .then(function(devices) {
-                var list = document.getElementById('device-list');
-                if (!list) return;
-                if (devices.length === 0) {
-                    list.innerHTML = '<div class="loading-text">No devices registered yet.</div>';
-                    return;
-                }
-                var html = '';
-                devices.forEach(function(d) {
-                    var statusIcon = d.online ? '🟢' : '🔴';
-                    var disabled = d.online ? '' : 'disabled';
-                    html +=
-                        '<div class="device-item">' +
-                            '<span class="dev-status">' + statusIcon + '</span>' +
-                            '<div class="dev-info">' +
-                                '<div class="dev-name">' + escapeHtml(d.id) + '</div>' +
-                                '<div class="dev-meta">' + escapeHtml(d.label) + ' | DC' + d.dc + ' | ' + escapeHtml(d.ssh_target) + '</div>' +
-                            '</div>' +
-                            '<button class="dev-ssh-btn" onclick="sshToDevice(\'' + d.id + '\')" ' + disabled + '>SSH</button>' +
-                        '</div>';
-                });
-                list.innerHTML = html;
-            })
-            .catch(function() {
-                var list = document.getElementById('device-list');
-                if (list) list.innerHTML = '<div class="loading-text" style="color:#e94560;">Failed to load devices</div>';
-            });
-    }
-
-    // SSH to a registered device
-    function sshToDevice(deviceID) {
-        // Show terminal, hide DC select
-        document.getElementById('dc-select-screen').style.display = 'none';
-        document.getElementById('terminal-container').style.display = 'block';
-
-        terminalTitle.textContent = 'Zero-FAS Terminal — Device ' + deviceID;
-
-        var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var wsUrl = protocol + '//' + window.location.host + '/shell/device?device_id=' + deviceID;
-
-        log('Connecting to device ' + deviceID + '...\n');
-        setStatus('connecting to ' + deviceID + '...');
-
-        try {
-            ws = new WebSocket(wsUrl);
-        } catch (e) {
-            setStatus('❌ WebSocket error: ' + e.message, true);
-            log('ERROR: ' + e.message + '\n');
-            return;
-        }
-
-        ws.onopen = function() {
-            setStatus('✅ SSH connected to ' + deviceID + ' — type a command and press Enter');
-            promptEl.textContent = deviceID + ':~$';
-            inputEl.disabled = false;
-            inputEl.focus();
-            log('Connected! SSH session established to ' + deviceID + '.\n');
-            termActive = true;
-        };
-
-        ws.onclose = function(e) {
-            setStatus('❌ Disconnected from ' + deviceID + ' (code: ' + e.code + ')', true);
-            inputEl.disabled = true;
-            termActive = false;
-            log('\nConnection closed.\n');
-        };
-
-        ws.onerror = function() {
-            setStatus('❌ WebSocket error', true);
-            inputEl.disabled = true;
-            termActive = false;
-            log('ERROR: WebSocket connection failed.\n');
-        };
-
-        ws.onmessage = function(event) {
-            if (event.data instanceof Blob) {
-                var reader = new FileReader();
-                reader.onload = function() {
-                    log(reader.result);
-                };
-                reader.readAsText(event.data);
-            } else {
-                log(event.data);
+            if (!host || !port) {
+                this.tunnelError = 'Host and port required';
+                return;
             }
-        };
+            this.tunnelError = '';
 
-        inputEl.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                var cmd = inputEl.value;
-                inputEl.value = '';
-                log(cmd + '\n');
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(new TextEncoder().encode(cmd + '\n'));
-                }
-            }
-        });
-
-        window.addEventListener('resize', function() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'resize', cols: 80, rows: 24 }));
-            }
-        });
-
-        console.log('Terminal connected to ' + deviceID);
-    }
-
-    // ── Tunnel Management ──
-
-    function toggleTunnelPanel() {
-        var panel = document.getElementById('tunnel-panel');
-        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-    }
-
-    function showTunnelError(msg) {
-        var el = document.getElementById('tunnel-error');
-        el.textContent = msg;
-        el.style.display = msg ? 'block' : 'none';
-    }
-
-    function createTunnel() {
-        var host = document.getElementById('tunnel-host').value;
-        var port = parseInt(document.getElementById('tunnel-port').value);
-        var desc = document.getElementById('tunnel-desc').value;
-
-        if (!host || !port) {
-            showTunnelError('Host and port required');
-            return;
-        }
-        showTunnelError('');
-
-        fetch('/api/tunnel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+            axios.post('/api/tunnel', {
                 target_host: host,
                 target_port: port,
                 description: desc
-            })
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (data.error) {
-                showTunnelError(data.error);
+            }).then(resp => {
+                if (resp.data.error) {
+                    this.tunnelError = resp.data.error;
+                } else {
+                    this.tunnels.push(resp.data);
+                }
+            }).catch(err => {
+                this.tunnelError = 'Request failed: ' + err.message;
+            });
+        },
+
+        // ===== xterm.js Initialization =====
+
+        initTerminal(dc) {
+            var term = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                theme: { background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#e94560' }
+            });
+            var fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.open(document.getElementById('terminal'));
+            fitAddon.fit();
+
+            this.term = term;
+            this.fitAddon = fitAddon;
+
+            var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var wsUrl = protocol + '//' + window.location.host + '/shell?dc=' + dc;
+            var statusEl = document.createElement('div');
+            statusEl.id = 'term-status';
+
+            try {
+                var ws = new WebSocket(wsUrl);
+                this.ws = ws;
+            } catch (e) {
+                term.write('WebSocket error: ' + e.message + '\r\n');
                 return;
             }
-            addTunnelToList(data);
-        })
-        .catch(function(err) {
-            showTunnelError('Request failed: ' + err.message);
-        });
-    }
 
-    function addTunnelToList(tunnel) {
-        var list = document.getElementById('tunnel-list');
-        var div = document.createElement('div');
-        div.className = 'tunnel-item';
-        div.id = 'tunnel-' + tunnel.id;
-        div.innerHTML =
-            '<div class="t-name">' + escapeHtml(tunnel.description) + '</div>' +
-            '<div class="t-url">→ <a href="' + tunnel.url + '" target="_blank" style="color:#e94560;">' + tunnel.url + '</a></div>' +
-            '<div class="t-status active">● active (' + tunnel.target_host + ':' + tunnel.target_port + ')</div>';
-        list.appendChild(div);
-    }
+            ws.onopen = function() {
+                term.write('Connected! SSH session via DC' + dc + '.\r\n');
+                term.focus();
+            };
 
-    function escapeHtml(str) {
-        var div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
+            ws.onclose = function() {
+                term.write('\r\nConnection closed.\r\n');
+            };
 
-    // Session check
-    fetch('/api/session')
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (data.authenticated) {
-                document.getElementById('user-info').textContent = '👤 ' + data.user;
-                document.getElementById('logout-btn').style.display = 'inline';
-                document.getElementById('login-btn').style.display = 'none';
-            } else {
-                document.getElementById('user-info').textContent = 'not logged in';
-                document.getElementById('logout-btn').style.display = 'none';
-                document.getElementById('login-btn').style.display = 'inline';
+            ws.onerror = function() {
+                term.write('WebSocket error.\r\n');
+            };
+
+            ws.onmessage = function(event) {
+                if (event.data instanceof Blob) {
+                    var reader = new FileReader();
+                    reader.onload = function() { term.write(reader.result); };
+                    reader.readAsText(event.data);
+                } else {
+                    term.write(event.data);
+                }
+            };
+
+            // Terminal → WebSocket
+            term.onData(function(data) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(new TextEncoder().encode(data));
+                }
+            });
+
+            // Resize
+            window.addEventListener('resize', function onResize() {
+                fitAddon.fit();
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+                }
+            });
+        },
+
+        initDeviceSSH(deviceId) {
+            var term = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                theme: { background: '#1a1a2e', foreground: '#e0e0e0', cursor: '#e94560' }
+            });
+            var fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.open(document.getElementById('terminal'));
+            fitAddon.fit();
+
+            this.term = term;
+            this.fitAddon = fitAddon;
+
+            var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var wsUrl = protocol + '//' + window.location.host + '/shell/device?device_id=' + deviceId;
+
+            try {
+                var ws = new WebSocket(wsUrl);
+                this.ws = ws;
+            } catch (e) {
+                term.write('WebSocket error: ' + e.message + '\r\n');
+                return;
             }
-        })
-        .catch(function() {
-            document.getElementById('user-info').textContent = 'not logged in';
-            document.getElementById('login-btn').style.display = 'inline';
-        });
 
-    // Initial load + periodic refresh
-    fetchDevices();
-    setInterval(fetchDevices, 10000);
-    </script>
+            ws.onopen = function() {
+                term.write('Connected to device ' + deviceId + '.\r\n');
+                term.focus();
+            };
+
+            ws.onclose = function() {
+                term.write('\r\nConnection closed.\r\n');
+            };
+
+            ws.onerror = function() {
+                term.write('WebSocket error.\r\n');
+            };
+
+            ws.onmessage = function(event) {
+                if (event.data instanceof Blob) {
+                    var reader = new FileReader();
+                    reader.onload = function() { term.write(reader.result); };
+                    reader.readAsText(event.data);
+                } else {
+                    term.write(event.data);
+                }
+            };
+
+            term.onData(function(data) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(new TextEncoder().encode(data));
+                }
+            });
+
+            window.addEventListener('resize', function onResize() {
+                fitAddon.fit();
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+                }
+            });
+        }
+    };
+}
+</script>
 </body>
 </html>
