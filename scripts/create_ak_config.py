@@ -29,11 +29,16 @@ for username, group_name, password in [('admin','admin-group','123123'),('ops','
 # Find or create authorization flow
 auth_flow = Flow.objects.filter(designation='authorization').first()
 if not auth_flow:
-    # Create one from the default blueprint
-    print("No authorization flow found, waiting 5s and retrying...")
+    print("No authorization flow found, waiting for it (up to 30s)...")
     import time
-    time.sleep(5)
-    auth_flow = Flow.objects.filter(designation='authorization').first()
+    for i in range(15):
+        time.sleep(2)
+        auth_flow = Flow.objects.filter(designation='authorization').first()
+        if auth_flow:
+            print("  Authorization flow ready after ~{}s".format((i+1)*2))
+            break
+    else:
+        print("  Authorization flow still not available after 30s, continuing anyway")
 
 inval_flow = Flow.objects.filter(slug='default-invalidation-flow').first()
 

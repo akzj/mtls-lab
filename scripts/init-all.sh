@@ -86,21 +86,21 @@ done
 
 echo ""
 echo "[5/6] Exporting SSH CA public keys..."
-# Read CA public keys from Vault and write to shared Docker volumes
-# The ssh-ca-pub volume is mounted on gateway:/ssh and ssh-server:/ssh
-# The ssh-ca-dc2-pub volume is mounted on gateway-dc2:/ssh
+# Read CA public keys from Vault and write to Docker named volumes
+# Gateway and ssh-server mount ssh-ca-pub:/ssh (read-only for them)
+# We write from the host using a temporary Alpine container
 DC1_CA_KEY=$(docker exec -e VAULT_SKIP_VERIFY=true vault vault read -field=public_key ssh/config/ca 2>/dev/null)
 if [ -n "$DC1_CA_KEY" ]; then
-  echo "$DC1_CA_KEY" | docker exec -i gateway sh -c "cat > /ssh/ca.pub" 2>/dev/null && \
-    echo "  DC1 SSH CA key exported to gateway ✅" || \
-    echo "  DC1 SSH CA key export to gateway failed"
+  echo "$DC1_CA_KEY" | docker run --rm -i -v vault_ssh-ca-pub:/ssh alpine sh -c "cat > /ssh/ca.pub" 2>/dev/null && \
+    echo "  DC1 SSH CA key exported ✅" || \
+    echo "  DC1 SSH CA key export failed"
 fi
 
 DC2_CA_KEY=$(docker exec -e VAULT_SKIP_VERIFY=true vault vault read -field=public_key ssh-dc2/config/ca 2>/dev/null)
 if [ -n "$DC2_CA_KEY" ]; then
-  echo "$DC2_CA_KEY" | docker exec -i gateway-dc2 sh -c "cat > /ssh/ca.pub" 2>/dev/null && \
-    echo "  DC2 SSH CA key exported to gateway-dc2 ✅" || \
-    echo "  DC2 SSH CA key export to gateway-dc2 failed"
+  echo "$DC2_CA_KEY" | docker run --rm -i -v vault_ssh-ca-dc2-pub:/ssh alpine sh -c "cat > /ssh/ca.pub" 2>/dev/null && \
+    echo "  DC2 SSH CA key exported ✅" || \
+    echo "  DC2 SSH CA key export failed"
 fi
 echo "  SSH CA export complete ✅"
 
