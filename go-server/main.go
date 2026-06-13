@@ -144,15 +144,23 @@ func main() {
 	// Initialize HTTP client for Vault API calls (dev-tls: skip server cert verification)
 	vaultHTTPClient = newVaultHTTPClient()
 
-	vaultToken, err := loginWithCert(
-		vaultAddr,
-		"certs/vault-client.crt",       // Client cert (Vault PKI signed, CN=go-server, client+server auth)
-		"certs/vault-client-key.pem",   // Client key
-		"certs/trust-chain.crt",  // CA chain (Vault PKI intermediate + root CA)
-	)
-	if err != nil {
-		log.Printf("WARNING: Vault cert login failed: %v", err)
+	// Try VAULT_TOKEN from environment first (simplest), fall back to cert-based login
+	vaultToken := os.Getenv("VAULT_TOKEN")
+	if vaultToken != "" {
+		log.Printf("Using VAULT_TOKEN from environment")
 	} else {
+		var loginErr error
+		vaultToken, loginErr = loginWithCert(
+			vaultAddr,
+			"certs/client.crt",       // Client cert (Vault PKI signed, CN=go-server, client+server auth)
+			"certs/client-key.pem",   // Client key
+			"certs/ca-chain.crt",  // CA chain (Vault PKI intermediate + root CA)
+		)
+		if loginErr != nil {
+			log.Printf("WARNING: Vault cert login failed: %v", loginErr)
+		}
+	}
+	if vaultToken != "" {
 		// Read Vault config
 		config = readVaultConfig(vaultAddr, vaultToken)
 		log.Printf("Vault config loaded: api_key=%s, db_password=%s",
