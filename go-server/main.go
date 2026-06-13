@@ -20,8 +20,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/oauth2"
+	"context"
+	"encoding/base64"
 )
 
 //go:embed static/*
@@ -39,6 +43,93 @@ var vaultHTTPClient *http.Client
 type VaultConfig struct {
 	APIKey     string `json:"api_key"`
 	DBPassword string `json:"db_password"`
+}
+
+// ===== OIDC Authentication =====
+
+// SessionStore manages browser sessions with in-memory store
+type SessionStore struct {
+	mu       sync.Mutex
+	sessions map[string]*Session
+	secret   []byte
+}
+
+// Session represents an authenticated browser session
+type Session struct {
+	ID        string    `json:"id"`
+	User      string    `json:"user"`
+	Email     string    `json:"email"`
+	Groups    []string  `json:"groups"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+var (
+	sessionStore *SessionStore
+	oidcProvider *oidc.Provider
+	oauthConfig  *oauth2.Config
+	oidcVerifier *oidc.IDTokenVerifier
+)
+
+// NewSessionStore creates a new session store
+func NewSessionStore() *SessionStore {
+	return &SessionStore{
+		sessions: make(map[string]*Session),
+		secret:   []byte("lab-session-secret-key-32-chars!"),
+	}
+}
+
+// Create creates a new session for a user
+func (ss *SessionStore) Create(user, email string, groups []string) *Session {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	id := generateSessionID()
+	session := &Session{
+		ID:        id,
+		User:      user,
+		Email:     email,
+		Groups:    groups,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	}
+	ss.sessions[id] = session
+	return session
+}
+
+// IsValid checks if a session ID is valid (exists and not expired)
+func (ss *SessionStore) IsValid(sessionID string) bool {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	session, ok := ss.sessions[sessionID]
+	if !ok {
+		return false
+	}
+	return time.Now().Before(session.ExpiresAt)
+}
+
+// GetUser returns the username for a session ID
+func (ss *SessionStore) GetUser(sessionID string) string {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	if session, ok := ss.sessions[sessionID]; ok {
+		return session.User
+	}
+	return ""
+}
+
+func generateSessionID() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return base64.URLEncoding.EncodeToString(b)
+}
+
+func generateState() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return base64.URLEncoding.EncodeToString(b)
 }
 
 func main() {
@@ -109,6 +200,16 @@ func main() {
 	// Device manager (initializes SSH CA keys, heartbeat checker)
 	initDeviceManager(vaultAddr, vaultToken)
 
+	// Initialize OIDC session store
+	sessionStore = NewSessionStore()
+
+	// Try to initialize OIDC provider (non-fatal if unavailable)
+	if err := initOIDC(); err != nil {
+		log.Printf("OIDC provider init (optional): %v", err)
+	} else {
+		log.Printf("OIDC provider initialized")
+	}
+
 	// Tunnel manager for SSH port forwarding through gateway
 	tunnelMgr := NewTunnelManager(vaultAddr, vaultToken, httpMux)
 
@@ -121,29 +222,56 @@ func main() {
 		tunnelMgr.handleCreateTunnel(w, r)
 	})
 
-	// Route: xterm.js terminal page
+	// Route: xterm.js terminal page (redirects to login if not authenticated)
 	httpMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			html, err := staticFS.ReadFile("static/xterm.html")
-			if err != nil {
-				log.Printf("Failed to read xterm.html: %v", err)
-				http.Error(w, "Internal error", http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(html)
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
 			return
 		}
-		http.NotFound(w, r)
+		// Check if authenticated
+		if !sessionCheck(r) {
+			http.Redirect(w, r, "/auth/login", http.StatusFound)
+			return
+		}
+		html, err := staticFS.ReadFile("static/xterm.html")
+		if err != nil {
+			log.Printf("Failed to read xterm.html: %v", err)
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(html)
 	})
 
-	// Route: WebSocket shell endpoint (for xterm.js → SSH via Vault CA)
+	// OIDC login endpoint (public)
+	httpMux.HandleFunc("/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		state := generateState()
+		http.Redirect(w, r, oauthConfig.AuthCodeURL(state), http.StatusFound)
+	})
+
+	// OIDC callback endpoint (public)
+	httpMux.HandleFunc("/auth/callback", oidcCallbackHandler)
+
+	// Health check (public)
+	httpMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	// Route: WebSocket shell endpoint (protected by OIDC middleware)
 	httpMux.HandleFunc("/shell", func(w http.ResponseWriter, r *http.Request) {
+		if !sessionCheck(r) {
+			http.Redirect(w, r, "/auth/login", http.StatusFound)
+			return
+		}
 		shellHandler(w, r, vaultAddr, vaultToken)
 	})
 
-	// Route: Device SSH shell endpoint
+	// Route: Device SSH shell endpoint (protected by OIDC middleware)
 	httpMux.HandleFunc("/shell/device", func(w http.ResponseWriter, r *http.Request) {
+		if !sessionCheck(r) {
+			http.Redirect(w, r, "/auth/login", http.StatusFound)
+			return
+		}
 		deviceShellHandler(w, r, vaultAddr, vaultToken)
 	})
 
@@ -948,6 +1076,101 @@ func deviceShellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vault
 	}()
 
 	session.Wait()
+}
+
+// ===== OIDC Handlers =====
+
+// initOIDC initializes the OIDC provider connection (non-fatal if unavailable)
+func initOIDC() error {
+	ctx := context.Background()
+
+	// Authentik OIDC discovery URL
+	providerURL := "http://authentik-server:9000/application/o/go-server/"
+
+	var err error
+	oidcProvider, err = oidc.NewProvider(ctx, providerURL)
+	if err != nil {
+		return fmt.Errorf("OIDC provider discovery: %w", err)
+	}
+
+	oauthConfig = &oauth2.Config{
+		ClientID:     "go-server-client-id",
+		ClientSecret: "go-server-client-secret",
+		RedirectURL:  "http://localhost:9091/auth/callback",
+		Endpoint:     oidcProvider.Endpoint(),
+		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
+	}
+
+	oidcVerifier = oidcProvider.Verifier(&oidc.Config{ClientID: "go-server-client-id"})
+
+	return nil
+}
+
+// oidcCallbackHandler handles the OIDC redirect from the identity provider
+func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+
+	// Exchange auth code for token
+	oauth2Token, err := oauthConfig.Exchange(ctx, r.URL.Query().Get("code"))
+	if err != nil {
+		log.Printf("OIDC token exchange error: %v", err)
+		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify ID token
+	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
+	if !ok {
+		log.Printf("OIDC: no id_token in response")
+		http.Error(w, "No id_token", http.StatusInternalServerError)
+		return
+	}
+
+	idToken, err := oidcVerifier.Verify(ctx, rawIDToken)
+	if err != nil {
+		log.Printf("OIDC token verification error: %v", err)
+		http.Error(w, "Token verification failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Extract claims
+	var claims struct {
+		Sub    string   `json:"sub"`
+		Name   string   `json:"name"`
+		Email  string   `json:"email"`
+		Groups []string `json:"groups"`
+	}
+	if err := idToken.Claims(&claims); err != nil {
+		log.Printf("OIDC claims error: %v", err)
+		http.Error(w, "Claims extraction failed", http.StatusInternalServerError)
+		return
+	}
+
+	// Create session
+	session := sessionStore.Create(claims.Name, claims.Email, claims.Groups)
+
+	// Set cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_id",
+		Value:    session.ID,
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   3600,
+	})
+
+	log.Printf("OIDC login: user=%s email=%s", claims.Name, claims.Email)
+
+	// Redirect to Web UI
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// sessionCheck checks if the request has a valid session cookie
+func sessionCheck(r *http.Request) bool {
+	cookie, err := r.Cookie("session_id")
+	if err != nil {
+		return false
+	}
+	return sessionStore.IsValid(cookie.Value)
 }
 
 // ──────────────────────────────────────────────

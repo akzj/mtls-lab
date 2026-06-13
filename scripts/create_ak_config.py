@@ -76,4 +76,34 @@ else:
     print(f"ERROR: No authorization flow available! Cannot create OIDC provider.")
     print(f"Flows in DB: {[f.slug for f in Flow.objects.all()]}")
 
-print("\n=== Done ===")
+# Create Go Server OIDC application
+print("")
+if auth_flow:
+    go_server_redirect_uris = [
+        "http://localhost:9091/auth/callback",
+        "https://localhost:9091/auth/callback",
+    ]
+    go_prov, _ = OAuth2Provider.objects.get_or_create(
+        name='Go Server',
+        defaults={
+            'authorization_flow': auth_flow,
+            'invalidation_flow': inval_flow,
+            'client_id': 'go-server-client-id',
+            'client_secret': 'go-server-client-secret',
+            'redirect_uris': [
+                RedirectURI(matching_mode=RedirectURIMatchingMode.STRICT, url=u)
+                for u in go_server_redirect_uris
+            ],
+        }
+    )
+    print(f"OIDC Provider: {go_prov.name}")
+
+    go_app, _ = Application.objects.get_or_create(
+        slug='go-server',
+        defaults={'name': 'Go Server', 'provider': go_prov, 'meta_launch_url': 'http://localhost:9091/'},
+    )
+    print(f"Application: {go_app.name}")
+else:
+    print("ERROR: No authorization flow available! Cannot create Go Server OIDC provider.")
+
+print("\n=== Done ===\n")
