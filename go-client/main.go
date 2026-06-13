@@ -657,6 +657,9 @@ func configureSSHD() error {
 	if !hadPasswordAuth {
 		newLines = append(newLines, "PasswordAuthentication no")
 	}
+	// Allow RSA SHA-1 for Vault CA certificate compatibility (OpenSSH 9.6+)
+	newLines = append(newLines, "PubkeyAcceptedAlgorithms +ssh-rsa")
+	newLines = append(newLines, "CASignatureAlgorithms +ssh-rsa")
 	if !hadPubkeyAuth {
 		newLines = append(newLines, "PubkeyAuthentication yes")
 	}

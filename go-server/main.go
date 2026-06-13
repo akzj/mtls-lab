@@ -429,25 +429,25 @@ func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken 
 		return
 	}
 
-	// Try pre-deployed Ed25519 key first
+	// Try Vault-signed certificate FIRST, Ed25519 key as fallback
 	sshAuthMethod := ssh.PublicKeys(keySigner)
-	keyBytes, readErr := os.ReadFile("/app/keys/ssh-key")
-	if readErr == nil {
-		loadedKey, parseErr := ssh.ParsePrivateKey(keyBytes)
-		if parseErr == nil {
-			log.Printf("Using Ed25519 key for SSH auth")
-			sshAuthMethod = ssh.PublicKeys(loadedKey)
+	parsedCert, _, _, _, parseErr := ssh.ParseAuthorizedKey([]byte(signedKeyStr))
+	if parseErr == nil {
+		if cert, ok := parsedCert.(*ssh.Certificate); ok {
+			certSigner, signErr := ssh.NewCertSigner(cert, keySigner)
+			if signErr == nil {
+				log.Printf("Using Vault-signed cert for SSH auth")
+				sshAuthMethod = ssh.PublicKeys(certSigner)
+			}
 		}
 	} else {
-		// Fall back to certificate
-		parsedCert, _, _, _, parseErr := ssh.ParseAuthorizedKey([]byte(signedKeyStr))
-		if parseErr == nil {
-			if cert, ok := parsedCert.(*ssh.Certificate); ok {
-				certSigner, signErr := ssh.NewCertSigner(cert, keySigner)
-				if signErr == nil {
-					log.Printf("Using signed cert for SSH auth")
-					sshAuthMethod = ssh.PublicKeys(certSigner)
-				}
+		// Fall back to Ed25519 key
+		keyBytes, readErr := os.ReadFile("/app/keys/ssh-key")
+		if readErr == nil {
+			loadedKey, parseErr := ssh.ParsePrivateKey(keyBytes)
+			if parseErr == nil {
+				log.Printf("Using Ed25519 key for SSH auth (cert not available)")
+				sshAuthMethod = ssh.PublicKeys(loadedKey)
 			}
 		}
 	}
