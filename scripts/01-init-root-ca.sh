@@ -146,7 +146,7 @@ echo "[5/6] Importing private key to YubiKey PIV slot ${SLOT}..."
 echo "      (Key already backed up at: ${KEY_PEM})"
 
 # Convert PEM key to DER for YubiKey import
-TMP_KEY_DER=$(mktemp /tmp/root-ca-key.XXXXXXXXXX.der)
+TMP_KEY_DER=$(mktemp /tmp/root-ca-key.XXXXXXXXXX)
 openssl pkcs8 -topk8 -nocrypt -in "$KEY_PEM" -outform DER -out "$TMP_KEY_DER" 2>/dev/null
 
 # Check if slot 9c already has a key
