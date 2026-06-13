@@ -26,7 +26,7 @@ resource "vault_ssh_secret_backend_role" "sign_dc2" {
   allowed_users           = "*"
   default_user            = "ssh-user"
   default_extensions = {
-    "login@openssh.com"       = "permit-pty"
+    "permit-pty"              = ""
     "permit-agent-forwarding" = ""
     "permit-port-forwarding"  = ""
   }
