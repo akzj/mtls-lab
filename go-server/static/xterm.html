@@ -254,6 +254,12 @@ function app() {
                 term.focus();
             };
 
+            term.onData(function(data) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(data);
+                }
+            });
+
             ws.onclose = function() {
                 term.write('\r\nConnection closed.\r\n');
             };
