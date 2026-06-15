@@ -556,7 +556,7 @@ def test_mtls_identity():
             ], capture_output=True, text=True, timeout=10)
             
             data = json.loads(result.stdout)
-            username = data.get("username", "")
+            username = data.get("resolved_name", data.get("username", ""))
             tests.append((f'{user} cert → /api/whoami (HTTP {result.returncode})', result.returncode == 0))
             tests.append((f'{user} username={username}', username == user))
         except Exception as e:

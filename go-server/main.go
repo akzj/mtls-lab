@@ -940,8 +940,17 @@ func whoamiHandler(w http.ResponseWriter, r *http.Request) {
 		username = "anonymous"
 	}
 
+	// Resolve identity from certificate CN
+	identity := resolveIdentityFromCertCN(username)
+	groups := []string{}
+	if identity != nil {
+		groups = identity.Groups
+	}
+
 	resp := map[string]interface{}{
 		"username":    username,
+		"resolved_name": identity.Username,
+		"groups":     groups,
 		"auth_method": "client_cert",
 		"cn":          username,
 	}
