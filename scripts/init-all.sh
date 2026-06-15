@@ -21,6 +21,9 @@ docker cp "$SCRIPT_DIR/create_ak_config.py" authentik-server:/create_ak_config.p
 docker exec authentik-server env PYTHONPATH=/authentik:/ak-root/venv/lib/python3.12/site-packages \
   /ak-root/venv/bin/python3 /create_ak_config.py 2>&1 | grep -E "Group:|User:|OIDC|Signing|Application|Done" | sed 's/^/  /'
 echo "  Authentik init complete ✅"
+echo "  Restarting go-server to pick up OIDC configuration..."
+docker compose restart go-server 2>/dev/null
+sleep 3
 
 echo "[4/6] Applying Terraform for Vault PKI + KV + OIDC + SSH..."
 cd "$PROJECT_DIR/terraform"

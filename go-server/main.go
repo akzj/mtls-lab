@@ -202,6 +202,19 @@ func main() {
 	// Initialize HTTP client for Vault API calls (dev-tls: skip server cert verification)
 	vaultHTTPClient = newVaultHTTPClient()
 
+	// Retry OIDC init in background if it fails (Authentik may not be ready yet)
+	go func() {
+		for i := 0; i < 12; i++ {
+			if oauthConfig != nil {
+				return
+			}
+			if err := initOIDC(); err != nil {
+				log.Printf("OIDC init attempt %d/12 failed: %v", i+1, err)
+				time.Sleep(5 * time.Second)
+			}
+		}
+	}()
+
 	// Try VAULT_TOKEN from environment first (simplest), fall back to cert-based login
 	vaultToken := os.Getenv("VAULT_TOKEN")
 	if vaultToken != "" {
