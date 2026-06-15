@@ -175,19 +175,88 @@ func hasGroup(userGroups, requiredGroups []string) bool {
 }
 
 // checkRBAC checks if the request has permission for the given resource
+// Supports both OIDC sessions and mTLS client certificates (via X-Forwarded-Cert-CN)
 func checkRBAC(r *http.Request, resource string) bool {
-	cookie, err := r.Cookie("session_id")
-	if err != nil {
-		return false
-	}
-
-	userGroups := sessionStore.GetGroups(cookie.Value)
+	userGroups := getUserGroups(r)
 	allowed, exists := rbacConfig.AllowedGroups[resource]
 	if !exists {
 		return false
 	}
 
 	return hasGroup(userGroups, allowed)
+}
+
+// ===== Identity Federation (mTLS + OIDC) =====
+
+// IdentityInfo represents a resolved user identity
+type IdentityInfo struct {
+	Username string   `json:"username"`
+	Groups   []string `json:"groups"`
+	Source   string   `json:"source"` // "mtls_cert" or "oidc_session"
+}
+
+// oidcUserToGroup maps usernames to their RBAC groups
+var oidcUserToGroup = map[string][]string{
+	"admin": {"admin-group"},
+	"ops":   {"ops-group"},
+	"dev":   {"dev-group"},
+}
+
+// resolveIdentityFromCertCN extracts identity from a client certificate CN
+// CN format: username@lab.local → username → group lookup
+func resolveIdentityFromCertCN(cn string) *IdentityInfo {
+	// Extract username part (before @)
+	username := cn
+	if idx := strings.Index(cn, "@"); idx >= 0 {
+		username = cn[:idx]
+	}
+
+	// Look up groups
+	groups := oidcUserToGroup[username]
+	if groups == nil {
+		groups = []string{}
+	}
+
+	return &IdentityInfo{
+		Username: username,
+		Groups:   groups,
+		Source:   "mtls_cert",
+	}
+}
+
+// getUserGroups extracts user groups from either mTLS cert or OIDC session
+// Priority: mTLS client cert (X-Forwarded-Ssl-Client-DN header) → OIDC session cookie
+func getUserGroups(r *http.Request) []string {
+	// First check: mTLS client certificate (forwarded by nginx from verified client cert)
+	// Header contains subject DN like "CN=admin@lab.local,O=..."
+	clientDN := r.Header.Get("X-Forwarded-Ssl-Client-DN")
+	if clientDN != "" {
+		// Parse CN from DN string (format: "CN=value,...")
+		certCN := ""
+		if idx := strings.Index(clientDN, "CN="); idx >= 0 {
+			cnPart := clientDN[idx+3:]
+			if end := strings.IndexAny(cnPart, ",;"); end >= 0 {
+				certCN = strings.TrimSpace(cnPart[:end])
+			} else {
+				certCN = strings.TrimSpace(cnPart)
+			}
+		}
+		if certCN != "" {
+			identity := resolveIdentityFromCertCN(certCN)
+			if len(identity.Groups) > 0 {
+			return identity.Groups
+		}
+	}
+
+	// Second check: OIDC session cookie
+	cookie, err := r.Cookie("session_id")
+	if err == nil && sessionStore.IsValid(cookie.Value) {
+		return sessionStore.GetGroups(cookie.Value)
+	}
+
+	return nil
+	}
+	return nil
 }
 
 func main() {

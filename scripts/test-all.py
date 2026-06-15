@@ -536,6 +536,36 @@ def report(category, results):
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# mTLS Identity Test
+# ---------------------------------------------------------------------------
+def test_mtls_identity():
+    """Test mTLS client certificate identity resolution (admin/ops/dev certs)."""
+    tests = []
+    cert_dir = f"{PROJECT_DIR}/certs"
+
+    for user in ['admin', 'ops', 'dev']:
+        try:
+            cert = f"{cert_dir}/{user}.crt"
+            key = f"{cert_dir}/{user}-key.pem"
+            
+            result = subprocess.run([
+                "curl", "-sk", "--cert", cert, "--key", key,
+                "--resolve", "go-server:9090:127.0.0.1",
+                "https://go-server:9090/api/whoami"
+            ], capture_output=True, text=True, timeout=10)
+            
+            data = json.loads(result.stdout)
+            username = data.get("username", "")
+            tests.append((f'{user} cert → /api/whoami (HTTP {result.returncode})', result.returncode == 0))
+            tests.append((f'{user} username={username}', username == user))
+        except Exception as e:
+            tests.append((f'{user} cert → /api/whoami', False))
+            tests.append((f'{user} error: {e}', False))
+
+    return tests
+
+
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -559,6 +589,7 @@ def main():
     report("6. Terraform", test_terraform())
     report("7. step-ca ACME", test_step_ca_acme())
     report("8. Network / DNS", test_network_dns())
+    report("9. mTLS Identity", test_mtls_identity())
 
     total = PASS + FAIL
     print(f"\n{'=' * 60}")
