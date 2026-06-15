@@ -4,8 +4,13 @@
   "crt": "/home/step/certs/intermediate.crt",
   "key": "/home/step/secrets/intermediate-key",
   "address": ":8443",
-  "dnsNames": ["step-ca", "localhost"],
-  "logger": {"format": "text"},
+  "dnsNames": [
+    "step-ca",
+    "localhost"
+  ],
+  "logger": {
+    "format": "text"
+  },
   "db": {
     "type": "badgerv2",
     "dataSource": "/home/step/db"
@@ -21,6 +26,20 @@
           "maxTLSCertDuration": "720h",
           "defaultTLSCertDuration": "720h"
         }
+      },
+      {
+        "type": "JWK",
+        "name": "admin",
+        "key": {
+          "use": "sig",
+          "kty": "EC",
+          "kid": "wC1_v5ibrjqiJ8-mtexAHn7BS5qCkxsKlRBCz_ka2Ls",
+          "crv": "P-256",
+          "alg": "ES256",
+          "x": "y4-2DyUG0TnT9VYFfffsTXZ1gbEUP2ZpzqPvHdodN5M",
+          "y": "g3c_PZS1PobA_CqNpNf-i2FdsELXXSpl-ZXmQMV7fko"
+        },
+        "encryptedKey": "{\n  \"protected\": \"eyJhbGciOiJQQkVTMi1IUzI1NitBMTI4S1ciLCJjdHkiOiJqd2sranNvbiIsImVuYyI6IkEyNTZHQ00iLCJwMmMiOjYwMDAwMCwicDJzIjoicnA2bVJ2YmtJWFg4RW9TUVdHaWt0QSJ9\",\n  \"encrypted_key\": \"YAFA1zHmlU6IT_NGdb3APdT5GWrO4DtzA7rIAMEoHCFuVmlfNAofbA\",\n  \"iv\": \"j2Ig3GhOzAG6_nUU\",\n  \"ciphertext\": \"PoyXWnet9b7dZVg3rYEJb4l-nJcncp89i9iYwzWfj99H0Y_RAM4kNY94DGT0HUPni0S_oTc75Y1l9ifoFNjuEJGrVUTt1C1WVim2R2t-InF1d-7pxOh6n8UQu3RMihdQeDl50QrOqRK1hk8djHSUZ5kVwxBvGnteXM8RuhwmdxQS1KlyKULHefOqDT-4SIhwv-h5songhjcOQFzandecfW5XmUYQmJCo999sbzkDKjAaUjuemDjz5D2APDK7jJwQDHUFtFhPG8FEVGpkLBomeImLP3JN84GaoA2na2qoi6F4kCy6bvGknVdzXskrUTg4xB33T9CaKIdISyo7M9Q\",\n  \"tag\": \"BKifZL8j0ounkWgM8BC8dA\"\n}"
       }
     ]
   },
