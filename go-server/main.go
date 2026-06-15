@@ -223,9 +223,9 @@ func main() {
 		var loginErr error
 		vaultToken, loginErr = loginWithCert(
 			vaultAddr,
-			"certs/client.crt",       // Client cert (Vault PKI signed, CN=go-server, client+server auth)
-			"certs/client-key.pem",   // Client key
-			"certs/ca-chain.crt",  // CA chain (Vault PKI intermediate + root CA)
+			"certs/go-server.crt",       // Dedicated cert (Vault PKI signed, CN=go-server)
+			"certs/go-server-key.pem",   // Dedicated key
+			"certs/trust-chain.crt",  // Vault PKI intermediate + root CA
 		)
 		if loginErr != nil {
 			log.Printf("WARNING: Vault cert login failed: %v", loginErr)
