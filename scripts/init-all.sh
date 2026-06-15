@@ -105,6 +105,38 @@ fi
 echo "  SSH CA export complete ✅"
 
 echo ""
+
+echo "  SSH CA export complete ✅"
+
+echo "[5.1/6] Signing nginx server certificate with step-ca..."
+# Generate nginx cert with SANs for mTLS verification
+docker exec step-ca sh -c "
+    cd /tmp && rm -f nginx.crt nginx-key.pem
+    step ca certificate nginx nginx.crt nginx-key.pem \
+        --ca-url https://localhost:8443 \
+        --provisioner admin \
+        --not-after=720h \
+        --password-file /home/step/config/password \
+        --root /home/step/certs/root.crt \
+        --san nginx.lab.local --san localhost --san nginx --san 127.0.0.1
+" 2>/dev/null && echo "  nginx cert signed ✅" || echo "  nginx cert sign failed"
+# Extract server cert only (remove intermediate CA chain)
+DOCKER_CP_RESULT=$(docker cp step-ca:/tmp/nginx.crt /tmp/nginx.crt 2>/dev/null && echo ok)
+if [ "$DOCKER_CP_RESULT" = "ok" ]; then
+    python3 << "PYEOF"
+with open("/tmp/nginx.crt") as f:
+    c = f.read()
+parts = c.split("-----BEGIN CERTIFICATE-----")
+if len(parts) >= 2:
+    cert = "-----BEGIN CERTIFICATE-----" + parts[1].split("-----END CERTIFICATE-----")[0] + "-----END CERTIFICATE-----\n"
+    with open("certs/nginx.crt", "w") as f:
+        f.write(cert)
+PYEOF
+    docker cp step-ca:/tmp/nginx-key.pem certs/nginx-key.pem 2>/dev/null
+    docker exec nginx nginx -s reload 2>/dev/null
+    echo "  nginx cert deployed to /certs ✅"
+fi
+
 echo "[6/6] Final verification..."
 echo "  PKI:" && docker exec -e VAULT_SKIP_VERIFY=true vault vault secrets list 2>/dev/null | grep -c "pki/" | xargs echo "    pki engine"
 echo "  KV:" && docker exec -e VAULT_SKIP_VERIFY=true vault vault secrets list 2>/dev/null | grep -c "kv/" | xargs echo "    kv engine"
