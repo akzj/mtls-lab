@@ -126,11 +126,17 @@ if auth_flow:
         name='Email - Email',
         defaults={'scope_name': 'email', 'expression': 'return {"email": user.email}'},
     )
+    sm_groups, _ = ScopeMapping.objects.get_or_create(
+        name='Profile - Groups',
+        defaults={'scope_name': 'profile', 'expression': 'return {"groups": [g.name for g in user.ak_groups.all()]}'},
+    )
     for p in [prov, go_prov]:
         if sm_name not in p.property_mappings.all():
             p.property_mappings.add(sm_name)
         if sm_email not in p.property_mappings.all():
             p.property_mappings.add(sm_email)
+        if sm_groups not in p.property_mappings.all():
+            p.property_mappings.add(sm_groups)
     print("Scope mappings added ✅")
 else:
     print("ERROR: No authorization flow available! Cannot create Go Server OIDC provider.")
