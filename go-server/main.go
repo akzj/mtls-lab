@@ -250,10 +250,17 @@ func getUserGroups(r *http.Request) []string {
 
 	// Second check: OIDC session cookie
 	cookie, err := r.Cookie("session_id")
-	if err == nil && sessionStore.IsValid(cookie.Value) {
-		return sessionStore.GetGroups(cookie.Value)
+	if err != nil {
+		log.Printf("RBAC: no session cookie: %v", err)
+	} else if !sessionStore.IsValid(cookie.Value) {
+		log.Printf("RBAC: session cookie invalid or expired: %s", cookie.Value[:12])
+	} else {
+		groups := sessionStore.GetGroups(cookie.Value)
+		log.Printf("RBAC: OIDC session groups=%v", groups)
+		return groups
 	}
 
+	log.Printf("RBAC: no groups found (header=%q)", r.Header.Get("X-Forwarded-Ssl-Client-DN"))
 	return nil
 	}
 	return nil
@@ -1388,7 +1395,7 @@ func oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   3600,
 	})
 
-	log.Printf("OIDC login: user=%s email=%s", claims.Name, claims.Email)
+	log.Printf("OIDC login: user=%s email=%s groups=%v", claims.Name, claims.Email, claims.Groups)
 
 	// Redirect to Web UI
 	http.Redirect(w, r, "/", http.StatusFound)
