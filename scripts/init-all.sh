@@ -24,6 +24,9 @@ echo "  Authentik init complete ✅"
 echo "  Restarting go-server to pick up OIDC configuration..."
 docker compose restart go-server 2>/dev/null
 sleep 3
+echo "[3.5/6] Initializing mtls-lab database..."
+bash "$SCRIPT_DIR/db/init-db.sh"
+echo "  mtls-lab DB init complete ✅"
 
 echo "[4/6] Applying Terraform for Vault PKI + KV + OIDC + SSH..."
 cd "$PROJECT_DIR/terraform"

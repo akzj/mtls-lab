@@ -213,6 +213,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+  # ──────────────────────────────────────────────
+  # PostgreSQL — mtls-lab database (PBAC)
+  # ──────────────────────────────────────────────
+  mtls-db:
+    image: postgres:16-alpine
+    container_name: mtls-db
+    environment:
+      POSTGRES_DB: mtls
+      POSTGRES_USER: mtls
+      POSTGRES_PASSWORD: db-pass-98765
+    volumes:
+      - mtls-db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mtls"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   # ──────────────────────────────────────────────
   # Redis — Authentik cache/queue
@@ -291,4 +309,5 @@ volumes:
   authentik-media:
   authentik-templates:
   authentik-custom-templates:
+  mtls-db-data:
   step-ca-db:

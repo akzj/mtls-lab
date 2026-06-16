@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"database/sql"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -23,6 +24,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
+	_ "github.com/lib/pq"
 	"golang.org/x/oauth2"
 	"context"
 	"encoding/base64"
@@ -63,6 +65,56 @@ type VaultConfig struct {
 	APIKey     string `json:"api_key"`
 	DBPassword string `json:"db_password"`
 }
+
+// ===== PBAC (Permission-Based Access Control) =====
+
+// permStore is the global PermissionStore instance (nil if DB is unavailable)
+var permStore *PermissionStore
+
+// PermissionStore provides database-backed permission lookups
+type PermissionStore struct {
+	db *sql.DB
+}
+
+// GetUserPermissions retrieves all permission names for a given username
+func (ps *PermissionStore) GetUserPermissions(username string) ([]string, error) {
+	rows, err := ps.db.Query(`
+		SELECT p.name FROM permissions p
+		JOIN user_permissions up ON p.id = up.permission_id
+		JOIN users u ON u.id = up.user_id
+		WHERE u.username = $1
+	`, username)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var perms []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		perms = append(perms, p)
+	}
+	return perms, rows.Err()
+}
+
+// initDB initializes a PostgreSQL connection pool
+func initDB(dsn string) (*sql.DB, error) {
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	return db, nil
+}
+
 
 // ===== OIDC Authentication =====
 
@@ -162,47 +214,16 @@ func generateState() string {
 	return base64.URLEncoding.EncodeToString(b)
 }
 
-// ===== RBAC (Role-Based Access Control) =====
-
-// RBACConfig defines which groups can access which resources
-type RBACConfig struct {
-	AllowedGroups map[string][]string
-}
-
-var rbacConfig = RBACConfig{
-	AllowedGroups: map[string][]string{
-		"devices:view":     {"admin-group", "ops-group", "dev-group"},
-		"devices:view_all": {"admin-group", "ops-group"},
-		"dc2:access":       {"admin-group"},
-		"tunnel:create":    {"admin-group", "ops-group"},
-		"tunnel:view":      {"admin-group", "ops-group", "dev-group"},
-		"shell:dc1":        {"admin-group", "ops-group", "dev-group"},
-		"shell:dc2":        {"admin-group"},
-	},
-}
-
-// hasGroup checks if user's groups contain at least one of the required groups
-func hasGroup(userGroups, requiredGroups []string) bool {
-	for _, ug := range userGroups {
-		for _, rg := range requiredGroups {
-			if ug == rg {
-				return true
-			}
+// checkPermission checks if the request has a specific permission
+// Queries the DB-backed PermissionStore, with fallback to hardcoded maps for dev compatibility.
+func checkPermission(r *http.Request, permission string) bool {
+	userPerms := getUserPermissions(r, permStore)
+	for _, p := range userPerms {
+		if p == permission {
+			return true
 		}
 	}
 	return false
-}
-
-// checkRBAC checks if the request has permission for the given resource
-// Supports both OIDC sessions and mTLS client certificates (via X-Forwarded-Cert-CN)
-func checkRBAC(r *http.Request, resource string) bool {
-	userGroups := getUserGroups(r)
-	allowed, exists := rbacConfig.AllowedGroups[resource]
-	if !exists {
-		return false
-	}
-
-	return hasGroup(userGroups, allowed)
 }
 
 // ===== Identity Federation (mTLS + OIDC) =====
@@ -243,11 +264,8 @@ func resolveIdentityFromCertCN(cn string) *IdentityInfo {
 	}
 }
 
-// getUserGroups extracts user groups from either mTLS cert or OIDC session
-// Priority: mTLS client cert (X-Forwarded-Ssl-Client-DN header) → OIDC session cookie
-func getUserGroups(r *http.Request) []string {
+func getUserPermissions(r *http.Request, ps *PermissionStore) []string {
 	// First check: mTLS client certificate (forwarded by nginx from verified client cert)
-	// Header contains subject DN like "CN=admin@lab.local,O=..."
 	clientDN := r.Header.Get("X-Forwarded-Ssl-Client-DN")
 	if clientDN != "" {
 		// Parse CN from DN string (format: "CN=value,...")
@@ -261,8 +279,24 @@ func getUserGroups(r *http.Request) []string {
 			}
 		}
 		if certCN != "" {
+			// Try DB first
+			username := certCN
+			if idx := strings.Index(certCN, "@"); idx >= 0 {
+				username = certCN[:idx]
+			}
+			if ps != nil {
+				perms, err := ps.GetUserPermissions(username)
+				if err == nil && len(perms) > 0 {
+					return perms
+				}
+				if err != nil {
+					log.Printf("PBAC: DB lookup failed for mTLS user %s: %v", username, err)
+				}
+			}
+			// Fallback: hardcoded map
 			identity := resolveIdentityFromCertCN(certCN)
 			if len(identity.Groups) > 0 {
+				log.Printf("PBAC: using fallback groups for mTLS user %s: %v", username, identity.Groups)
 				return identity.Groups
 			}
 		}
@@ -271,21 +305,34 @@ func getUserGroups(r *http.Request) []string {
 	// Second check: OIDC session cookie (independent of mTLS)
 	cookie, err := r.Cookie("session_id")
 	if err != nil {
-		log.Printf("RBAC: no session cookie: %v", err)
+		log.Printf("PBAC: no session cookie: %v", err)
 	} else if !sessionStore.IsValid(cookie.Value) {
-		log.Printf("RBAC: session cookie invalid or expired: %s", cookie.Value[:12])
+		log.Printf("PBAC: session cookie invalid or expired: %s", cookie.Value[:12])
 	} else {
+		username := sessionStore.GetUser(cookie.Value)
+		// Try DB by username first
+		if ps != nil && username != "" {
+			perms, err := ps.GetUserPermissions(username)
+			if err == nil && len(perms) > 0 {
+				return perms
+			}
+			if err != nil {
+				log.Printf("PBAC: DB lookup failed for OIDC user %s: %v", username, err)
+			}
+		}
+		// Fallback: use session groups
 		groups := sessionStore.GetGroups(cookie.Value)
-		log.Printf("RBAC: OIDC session groups=%v", groups)
-		return groups
+		if len(groups) > 0 {
+			log.Printf("PBAC: using fallback session groups for %s: %v", username, groups)
+			return groups
+		}
 	}
 
-	log.Printf("RBAC: no groups found (header=%q)", r.Header.Get("X-Forwarded-Ssl-Client-DN"))
+	log.Printf("PBAC: no permissions found (header=%q)", r.Header.Get("X-Forwarded-Ssl-Client-DN"))
 	return nil
 }
 
 func main() {
-	// Read Vault address
 	vaultAddr := os.Getenv("VAULT_ADDR")
 	if vaultAddr == "" {
 		vaultAddr = "https://vault:8200"
@@ -356,6 +403,21 @@ func main() {
 			maskString(config.APIKey), maskString(config.DBPassword))
 	}
 
+	// Initialize PostgreSQL connection for PBAC
+	if config.DBPassword != "" {
+		dbDsn := fmt.Sprintf("host=mtls-db port=5432 user=mtls dbname=mtls password=%s sslmode=disable", config.DBPassword)
+		db, err := initDB(dbDsn)
+		if err != nil {
+			log.Printf("WARNING: PostgreSQL unavailable — falling back to hardcoded permission maps: %v", err)
+		} else {
+			permStore = &PermissionStore{db: db}
+			log.Printf("PBAC: PostgreSQL connected, permission-based access control active")
+		}
+	} else {
+		log.Printf("PBAC: No db_password in Vault config — using hardcoded permission maps (dev mode)")
+	}
+
+
 	// Load server cert
 	serverCertFile := "certs/vault-client.crt"
 	serverKeyFile := "certs/vault-client-key.pem"
@@ -416,8 +478,8 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		// RBAC: tunnel creation requires admin or ops group
-		if !checkRBAC(r, "tunnel:create") {
+		// PBAC: tunnel creation requires tunnel:create permission
+		if !checkPermission(r, "tunnel:create") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte(`{"error":"forbidden","message":"Only admins and ops can create tunnels"}`))
@@ -478,9 +540,9 @@ func main() {
 			http.Redirect(w, r, "/auth/login", http.StatusFound)
 			return
 		}
-		// RBAC: DC2 requires admin group
+		// PBAC: DC2 requires shell:dc2 permission
 		dc := r.URL.Query().Get("dc")
-		if dc == "2" && !checkRBAC(r, "shell:dc2") {
+		if dc == "2" && !checkPermission(r, "shell:dc2") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte(`{"error":"forbidden","message":"DC2 access requires admin group"}`))
@@ -999,21 +1061,36 @@ func whoamiHandler(w http.ResponseWriter, r *http.Request) {
 	// Resolve identity from certificate CN
 	identity := resolveIdentityFromCertCN(username)
 	groups := []string{}
+	resolvedName := username
 	if identity != nil {
 		groups = identity.Groups
+		resolvedName = identity.Username
+	}
+
+	// Try to get permissions from DB if available
+	var permissions []string
+	if permStore != nil {
+		perms, err := permStore.GetUserPermissions(resolvedName)
+		if err == nil {
+			permissions = perms
+		} else {
+			log.Printf("[whoami] DB lookup failed for %s: %v", resolvedName, err)
+		}
 	}
 
 	resp := map[string]interface{}{
-		"username":    username,
-		"resolved_name": identity.Username,
-		"groups":     groups,
-		"auth_method": "client_cert",
-		"cn":          username,
+		"username":      username,
+		"resolved_name": resolvedName,
+		"groups":        groups,
+		"permissions":   permissions,
+		"auth_method":   "client_cert",
+		"cn":            username,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
+
 
 // registerHandler handles POST /api/register (mTLS required)
 // ===== Certificate Self-Service =====
