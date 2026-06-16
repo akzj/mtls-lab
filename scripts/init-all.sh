@@ -34,7 +34,7 @@ export VAULT_SKIP_VERIFY=true
 # Wait for OIDC discovery URL (needed by Terraform vault_jwt_auth_backend)
 echo "  Waiting for OIDC discovery URL..."
 for i in $(seq 1 30); do
-  curl -s --max-time 3 "http://authentik-server:9000/application/o/vault/.well-known/openid-configuration" 2>/dev/null | grep -q "issuer" && echo "  Discovery URL ready ✅" && break
+  curl -s --max-time 3 "http://auth.lab.local:9000/application/o/vault/.well-known/openid-configuration" 2>/dev/null | grep -q "issuer" && echo "  Discovery URL ready ✅" && break
   sleep 2
 done
 
@@ -149,12 +149,13 @@ echo "  OIDC:" && docker exec -e VAULT_SKIP_VERIFY=true vault vault auth list 2>
 echo ""
 echo "=== Initialization Complete ==="
 echo "Vault UI:     https://vault.lab.local:8200/ui (OIDC: admin/123123)"
-echo "             https://vault.lab.local:8200/ui"
-echo "Authentik:    http://localhost:9000 (admin/123123)"
-echo "             http://auth.lab.local:9000 (admin/123123)"
+echo "Authentik:    http://auth.lab.local:9000 (admin/123123)"
 echo "Web UI:       http://web.lab.local:9091"
-echo "             http://web.lab.local:9091"
-echo "SSH Gateway:  ssh gateway-user@localhost -p 2222"
-echo "             ssh gateway-user@vault.lab.local -p 2222"
-echo "SSH Gateway DC2: ssh gateway-user@localhost -p 2223"
-echo "                ssh gateway-user@vault.lab.local -p 2223"
+echo "SSH Gateway:  ssh gateway-user@vault.lab.local -p 2222"
+echo "SSH Gateway DC2: ssh gateway-user@vault.lab.local -p 2223"
+echo ""
+echo "  Localhost fallback (no DNS):"
+echo "  Vault UI:   https://localhost:8200/ui"
+echo "  Authentik:  http://localhost:9000"
+echo "  SSH:        ssh gateway-user@localhost -p 2222"
+echo "  SSH DC2:    ssh gateway-user@localhost -p 2223"

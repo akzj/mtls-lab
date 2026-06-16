@@ -121,13 +121,14 @@ Two trust chain files bundle the intermediates with the root:
 ┌─────────────────────────────────────────────────────────────────┐
 │  OIDC SSO Authentication Flow                                    │
 │                                                                   │
-│  User opens Vault UI at https://localhost:8200/ui                 │
+│  User opens Vault UI at https://vault.lab.local:8200/ui           │
+│  (or https://localhost:8200/ui without DNS)                       │
 │         │                                                         │
 │         ▼                                                         │
 │  Vault presents OIDC login button                                 │
 │         │                                                         │
 │         ▼                                                         │
-│  Redirect to Authentik :9000/application/o/vault/                 │
+│  Redirect to http://auth.lab.local:9000/application/o/vault/      │
 │         │                                                         │
 │         ▼                                                         │
 │  Authentik login page (username/password)                         │
@@ -154,11 +155,11 @@ Two trust chain files bundle the intermediates with the root:
 
 | Component | Role | URL |
 |-----------|------|-----|
-| Authentik Server | OIDC identity provider | http://localhost:9000 |
+| Authentik Server | OIDC identity provider | http://auth.lab.local:9000 |
 | Authentik Worker | Background tasks | (internal) |
 | PostgreSQL | Authentik database | (internal) |
 | Redis | Authentik cache/queue | (internal) |
-| Vault OIDC Auth | JWT/OIDC auth backend | https://localhost:8200 |
+| Vault OIDC Auth | JWT/OIDC auth backend | https://vault.lab.local:8200 |
 
 ### Vault OIDC Roles
 
@@ -279,8 +280,8 @@ Terraform is run by `scripts/init-all.sh` which:
 ### Application Flow (init-all.sh)
 
 ```
-[1] Wait for Vault (https://localhost:8200)
-[2] Wait for Authentik (http://localhost:9000)
+[1] Wait for Vault (https://vault.lab.local:8200 / localhost:8200)
+[2] Wait for Authentik (http://auth.lab.local:9000 / localhost:9000)
 [3] Initialize Authentik (create groups, users, OIDC provider, application)
 [4] Apply Terraform (PKI → KV → policies → auth → OIDC → SSH)
 [5] Export SSH CA public keys to gateway volumes

@@ -39,6 +39,25 @@ var upgrader = websocket.Upgrader{
 // Initialized once in main() with InsecureSkipVerify for dev mode.
 var vaultHTTPClient *http.Client
 
+
+// vaultTokenManager provides thread-safe access to the Vault token,
+// allowing the renewal goroutine to update it without races.
+var (
+	vaultTokenValue string
+	vaultTokenMu    sync.RWMutex
+)
+
+func getVaultToken() string {
+	vaultTokenMu.RLock()
+	defer vaultTokenMu.RUnlock()
+	return vaultTokenValue
+}
+
+func setVaultToken(token string) {
+	vaultTokenMu.Lock()
+	defer vaultTokenMu.Unlock()
+	vaultTokenValue = token
+}
 // VaultConfig holds the secret from Vault
 type VaultConfig struct {
 	APIKey     string `json:"api_key"`
@@ -244,11 +263,12 @@ func getUserGroups(r *http.Request) []string {
 		if certCN != "" {
 			identity := resolveIdentityFromCertCN(certCN)
 			if len(identity.Groups) > 0 {
-			return identity.Groups
+				return identity.Groups
+			}
 		}
 	}
 
-	// Second check: OIDC session cookie
+	// Second check: OIDC session cookie (independent of mTLS)
 	cookie, err := r.Cookie("session_id")
 	if err != nil {
 		log.Printf("RBAC: no session cookie: %v", err)
@@ -261,8 +281,6 @@ func getUserGroups(r *http.Request) []string {
 	}
 
 	log.Printf("RBAC: no groups found (header=%q)", r.Header.Get("X-Forwarded-Ssl-Client-DN"))
-	return nil
-	}
 	return nil
 }
 
@@ -299,13 +317,37 @@ func main() {
 		var loginErr error
 		vaultToken, loginErr = loginWithCert(
 			vaultAddr,
-			"certs/go-server.crt",       // Dedicated cert (Vault PKI signed, CN=go-server)
-			"certs/go-server-key.pem",   // Dedicated key
+			"certs/vault-client.crt",       // Dedicated cert (Vault PKI signed, CN=go-server)
+			"certs/vault-client-key.pem",   // Dedicated key
 			"certs/trust-chain.crt",  // Vault PKI intermediate + root CA
 		)
 		if loginErr != nil {
 			log.Printf("WARNING: Vault cert login failed: %v", loginErr)
 		}
+
+	// Store token in global for thread-safe access by handlers and the renewal goroutine
+	setVaultToken(vaultToken)
+
+	// Start Vault token renewal goroutine: re-authenticates via cert auth every 30 min.
+	// This prevents token expiry in long-running instances (token TTL = 86400s = 24h).
+	// On renewal failure the goroutine logs and retries — no cascading failure.
+	go func() {
+		for {
+			time.Sleep(30 * time.Minute)
+			newToken, err := loginWithCert(
+				vaultAddr,
+				"certs/vault-client.crt",
+				"certs/vault-client-key.pem",
+				"certs/trust-chain.crt",
+			)
+			if err != nil {
+				log.Printf("Vault token renewal failed: %v — will retry in 30 min", err)
+				continue
+			}
+			setVaultToken(newToken)
+			log.Printf("Vault token renewed via cert auth")
+		}
+	}()
 	}
 	if vaultToken != "" {
 		// Read Vault config
@@ -315,8 +357,8 @@ func main() {
 	}
 
 	// Load server cert
-	serverCertFile := "certs/server.crt"
-	serverKeyFile := "certs/server-key.pem"
+	serverCertFile := "certs/vault-client.crt"
+	serverKeyFile := "certs/vault-client-key.pem"
 	caCertFile := "certs/ca-chain.crt"
 
 	// Create mTLS config
@@ -366,7 +408,7 @@ func main() {
 	}
 
 	// Tunnel manager for SSH port forwarding through gateway
-	tunnelMgr := NewTunnelManager(vaultAddr, vaultToken, httpMux)
+	tunnelMgr := NewTunnelManager(vaultAddr, httpMux)
 
 	// Route: Tunnel management API
 	httpMux.HandleFunc("/api/tunnel", func(w http.ResponseWriter, r *http.Request) {
@@ -447,7 +489,7 @@ func main() {
 		if cookie, err := r.Cookie("session_id"); err == nil {
 			r.Header.Set("X-User", sessionStore.GetUser(cookie.Value))
 		}
-		shellHandler(w, r, vaultAddr, vaultToken)
+		shellHandler(w, r, vaultAddr)
 	})
 
 	// Route: Device SSH shell endpoint (protected by OIDC middleware)
@@ -456,7 +498,7 @@ func main() {
 			http.Redirect(w, r, "/auth/login", http.StatusFound)
 			return
 		}
-		deviceShellHandler(w, r, vaultAddr, vaultToken)
+		deviceShellHandler(w, r, vaultAddr)
 	})
 
 	// Route: Tunnel proxy
@@ -496,7 +538,8 @@ func sendWSMessage(conn *websocket.Conn, msg string) {
 
 // shellHandler handles WebSocket connections for xterm terminal → SSH via Vault CA
 // Supports ?dc=1 (default) or ?dc=2 for multi-datacenter isolation demo.
-func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken string) {
+func shellHandler(w http.ResponseWriter, r *http.Request, vaultAddr string) {
+	vaultToken := getVaultToken()
 	// Determine which datacenter to connect to
 	dc := r.URL.Query().Get("dc")
 	if dc == "" {
@@ -1060,7 +1103,8 @@ func devicesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // deviceShellHandler handles WebSocket connections for SSH to a registered device
-func deviceShellHandler(w http.ResponseWriter, r *http.Request, vaultAddr, vaultToken string) {
+func deviceShellHandler(w http.ResponseWriter, r *http.Request, vaultAddr string) {
+	vaultToken := getVaultToken()
 	deviceID := r.URL.Query().Get("device_id")
 	if deviceID == "" {
 		http.Error(w, "device_id required", http.StatusBadRequest)
@@ -1460,7 +1504,6 @@ type TunnelManager struct {
 	tunnels    map[int]*Tunnel
 	nextID     int
 	vaultAddr  string
-	vaultToken string
 	httpMux    *http.ServeMux
 }
 
@@ -1477,12 +1520,11 @@ type Tunnel struct {
 }
 
 // NewTunnelManager creates a new tunnel manager
-func NewTunnelManager(vaultAddr, vaultToken string, httpMux *http.ServeMux) *TunnelManager {
+func NewTunnelManager(vaultAddr string, httpMux *http.ServeMux) *TunnelManager {
 	return &TunnelManager{
-		tunnels:    make(map[int]*Tunnel),
+		tunnels:   make(map[int]*Tunnel),
 		nextID:     1,
 		vaultAddr:  vaultAddr,
-		vaultToken: vaultToken,
 		httpMux:    httpMux,
 	}
 }
@@ -1683,7 +1725,7 @@ func (tm *TunnelManager) signSSHKey(publicKey, validPrincipals, ttl string) (str
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("X-Vault-Token", tm.vaultToken)
+	req.Header.Set("X-Vault-Token", getVaultToken())
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := vaultHTTPClient.Do(req)

@@ -24,14 +24,19 @@ chmod 600 client-key.pem
 ### Via curl:
 
 ```bash
-# Login to Vault first
+# Login to Vault first (requires DNS for vault.lab.local)
 VAULT_TOKEN=$(curl -sk \
-  -X POST https://localhost:8200/v1/auth/userpass/login/admin \
+  -X POST https://vault.lab.local:8200/v1/auth/userpass/login/admin \
   -d '{"password":"admin123"}' | jq -r '.auth.client_token')
+
+# Fallback (no DNS):
+# VAULT_TOKEN=$(curl -sk \
+#   -X POST https://localhost:8200/v1/auth/userpass/login/admin \
+#   -d '{"password":"admin123"}' | jq -r '.auth.client_token')
 
 # Issue certificate
 curl -sk -H "X-Vault-Token: $VAULT_TOKEN" \
-  -X POST https://localhost:8200/v1/pki/issue/user \
+  -X POST https://vault.lab.local:8200/v1/pki/issue/user \
   -d '{"common_name":"admin@zero-fas.local","ttl":"24h"}' > cert.json
 
 # Extract cert and key
@@ -57,7 +62,12 @@ This will:
 ```bash
 curl --cert client.crt --key client-key.pem \
   --cacert certs/trust-chain.crt \
-  https://localhost:9090/api/whoami
+  https://web.lab.local:9090/api/whoami
+
+# Fallback (no DNS):
+# curl --cert client.crt --key client-key.pem \
+#   --cacert certs/trust-chain.crt \
+#   https://localhost:9090/api/whoami
 ```
 
 Response:

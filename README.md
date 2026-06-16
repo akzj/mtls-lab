@@ -1,5 +1,10 @@
 # Zero-FAS mTLS Lab
 
+
+> **DNS Prerequisite**: All services are accessed via `*.lab.local` domains resolved by CoreDNS
+> (port 5354). Run `scripts/setup-dns.sh` or configure `/etc/resolver/lab.local` → `127.0.0.1:5354`
+> before accessing services by domain name. See [docs/SETUP.md](docs/SETUP.md) for details.
+
 > **Zero-Trust PKI Laboratory with YubiKey Hardware Root of Trust**
 >
 > Three-layer PKI hierarchy · mTLS WebSocket · OIDC SSO (Authentik) · SSH CA · ACME (step-ca)
@@ -132,14 +137,16 @@ Go Client ─────────────https://step-ca:8443/acme/direc
 
 ### OIDC SSO (Vault login)
 ```
-User ──► Authentik :9000 ──OIDC──► Vault :8200 ──policy──► Access
+User ──► auth.lab.local:9000 ──OIDC──► vault.lab.local:8200 ──policy──► Access
   (admin/ops/dev)    (SSO login)     (OIDC auth)    (RBAC)
+  # Localhost fallback: http://localhost:9000 → https://localhost:8200/ui
 ```
 
 ### SSH Certificate Auth
 ```
-ssh gateway-user@localhost -p 2222 ──► Gateway ──signed cert──► SSH Server
+ssh gateway-user@vault.lab.local -p 2222 ──► Gateway ──signed cert──► SSH Server
   (Vault-signed cert)                   (bastion)    (verify: /ssh/ca.pub)
+  # Or via localhost: ssh gateway-user@localhost -p 2222
 ```
 
 1. **mTLS WebSocket**: Client ACME cert → nginx (verified via ca-chain.crt) → upstream to Go server (verified via trust-chain.crt)

@@ -21,7 +21,7 @@ resource "vault_cert_auth_backend_role" "go_server" {
   certificate          = file("${var.certs_dir}/trust-chain.crt")
   allowed_common_names = ["go-server"]
   token_policies       = ["server-policy"]
-  token_ttl            = 3600
+  token_ttl            = 86400
 }
 
 # Personal certificate roles (step-ca signed, ca-chain.crt trust)
@@ -32,7 +32,7 @@ resource "vault_cert_auth_backend_role" "personal_admin" {
   certificate           = file("${var.certs_dir}/ca-chain.crt")
   allowed_common_names  = ["admin@lab.local"]
   token_policies        = ["admin-policy"]
-  token_ttl             = 3600
+  token_ttl             = 86400
 }
 
 resource "vault_cert_auth_backend_role" "personal_ops" {
@@ -42,7 +42,7 @@ resource "vault_cert_auth_backend_role" "personal_ops" {
   certificate           = file("${var.certs_dir}/ca-chain.crt")
   allowed_common_names  = ["ops@lab.local"]
   token_policies        = ["ops-policy"]
-  token_ttl             = 3600
+  token_ttl             = 86400
 }
 
 resource "vault_cert_auth_backend_role" "personal_dev" {
@@ -52,5 +52,5 @@ resource "vault_cert_auth_backend_role" "personal_dev" {
   certificate           = file("${var.certs_dir}/ca-chain.crt")
   allowed_common_names  = ["dev@lab.local"]
   token_policies        = ["dev-policy"]
-  token_ttl             = 3600
+  token_ttl             = 86400
 }

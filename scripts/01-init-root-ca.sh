@@ -2,7 +2,7 @@
 #
 # 01-init-root-ca.sh
 # ====================
-# Create Root CA: OpenSSL key generation → backup → YubiKey import
+# Create Root CA: OpenSSL key generation → backup → (optional) YubiKey import
 #
 # This creates an RSA 2048-bit Root CA key with OpenSSL, creates a
 # self-signed certificate with proper CA extensions, then imports both
@@ -11,9 +11,12 @@
 # The software key backup is retained in root-ca/ for disaster recovery.
 # In production, this backup should be stored securely offline.
 #
-# Prerequisites:
-#   - YubiKey 5C Nano inserted (PIV enabled)
-#   - yubico-piv-tool installed
+# Prerequisites (software-only):
+#   - openssl installed
+#
+# Prerequisites (YubiKey mode):
+#   - YubiKey inserted (PIV enabled)
+#   - yubico-piv-tool, ykman installed
 #   - PIN: 123123 (default)
 #
 # Outputs:
@@ -46,6 +49,24 @@ PUBKEY="${CERTS_DIR}/root-ca.pub"
 OPENSSL_CONF="${ROOT_CA_DIR}/root-ca-ext.cnf"
 
 mkdir -p "$CERTS_DIR" "$ROOT_CA_DIR"
+
+# ── YubiKey detection ──────────────────────────
+YUBIKEY_PRESENT=false
+if command -v ykman &>/dev/null; then
+    if ykman piv info &>/dev/null 2>&1; then
+        YUBIKEY_PRESENT=true
+        echo "  ✅ YubiKey detected"
+    else
+        echo "  ℹ️  ykman found but no YubiKey device detected"
+    fi
+else
+    echo "  ℹ️  ykman not installed (YubiKey tools missing)"
+fi
+if [ "$YUBIKEY_PRESENT" = false ]; then
+    echo "  ℹ️  YubiKey import steps (5-6) will be SKIPPED"
+    echo "  ℹ️  Root CA will be software-only (key backup: root-ca/root-ca-key.pem)"
+fi
+
 
 echo "================================================"
 echo " Root CA Setup: OpenSSL + YubiKey Import"
@@ -140,6 +161,7 @@ else
     exit 1
 fi
 
+if [ "$YUBIKEY_PRESENT" = true ]; then
 # ── Step 5: Import private key to YubiKey ──────────
 echo ""
 echo "[5/6] Importing private key to YubiKey PIV slot ${SLOT}..."
@@ -159,6 +181,14 @@ else
   exit 1
 fi
 
+
+else
+    echo ""
+    echo "[5/6] YubiKey not available — SKIPPED"
+    echo "  ℹ️  Root CA key is software-only at: $KEY_PEM"
+    echo "  ℹ️  To import to YubiKey later: ykman piv keys import -m MGMT_KEY $SLOT $KEY_PEM"
+fi
+if [ "$YUBIKEY_PRESENT" = true ]; then
 # ── Step 6: Write certificate to YubiKey ───────────
 echo ""
 echo "[6/6] Writing certificate to YubiKey..."
@@ -167,6 +197,14 @@ ykman piv certificates import -m "$MGMT_KEY" "$SLOT" "$CERT_PEM" 2>&1 | while IF
 
 echo "  ✅ Certificate written to YubiKey slot ${SLOT}"
 
+else
+    echo ""
+    echo "[6/6] YubiKey not available — SKIPPED"
+    echo "  ℹ️  Certificate not written to YubiKey (no YubiKey present)"
+    echo "  ℹ️  To import later: ykman piv certificates import -m MGMT_KEY $SLOT $CERT_PEM"
+fi
+
+if [ "$YUBIKEY_PRESENT" = true ]; then
 # ── Verification ───────────────────────────────────
 echo ""
 echo "  ── YubiKey Slot ${SLOT} Verification ──"
@@ -179,6 +217,12 @@ echo ""
 echo "  Key source: imported (NOT on-card generated)"
 echo "  Key backup: ${KEY_PEM} ⚠️"
 
+else
+    echo ""
+    echo "  ── YubiKey Verification (SKIPPED — no YubiKey) ──"
+    echo "  ℹ️  Root CA is in software-only mode"
+fi
+
 # ── Done ───────────────────────────────────────────
 echo ""
 echo "================================================"
@@ -190,7 +234,7 @@ echo "   Root CA Certificate : ${CERT_PEM}"
 echo "   Root CA Key (backup): ${KEY_PEM}"
 echo "   Root CA Public Key  : ${PUBKEY}"
 echo "   Root CA (DER)       : ${CERT_DER}"
-echo "   Key Location        : YubiKey PIV slot ${SLOT} + ${KEY_PEM}"
+echo "   Key Location        : ${KEY_PEM} (software) + YubiKey PIV slot ${SLOT} (if imported)"
 echo "   Subject             : ${SUBJECT}"
 echo "   Validity            : ${VALID_DAYS} days"
 echo "   Algorithm           : RSA2048"

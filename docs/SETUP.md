@@ -1,5 +1,15 @@
 # Zero-FAS mTLS Lab — Setup Guide
 
+
+> **DNS Prerequisite**: All services use `*.lab.local` domain names (e.g., `vault.lab.local:8200`,
+> `auth.lab.local:9000`, `web.lab.local:9091`). CoreDNS on port 5354 resolves these to `127.0.0.1`.
+> Configure DNS before accessing services by domain:
+> ```bash
+> # macOS: /etc/resolver/lab.local → CoreDNS on 127.0.0.1:5354
+> # Or manually add entries to /etc/hosts
+> ```
+> See [VERIFY.md](VERIFY.md) for DNS setup instructions.
+
 ## Prerequisites
 
 ### Hardware
@@ -312,9 +322,16 @@ Expected output:
 [5/6] Exporting SSH CA public keys... Done
 [6/6] Final verification... PKI KV SSH OIDC
 === Initialization Complete ===
-Vault UI:     https://localhost:8200/ui
-Authentik:    http://localhost:9000
-SSH Gateway:  ssh gateway-user@localhost -p 2222
+Vault UI:     https://vault.lab.local:8200/ui (OIDC: admin/123123)
+Authentik:    http://auth.lab.local:9000 (admin/123123)
+Web UI:       http://web.lab.local:9091
+SSH Gateway:  ssh gateway-user@vault.lab.local -p 2222
+SSH Gateway DC2: ssh gateway-user@vault.lab.local -p 2223
+              
+Localhost fallback (no DNS):
+  Vault UI:   https://localhost:8200/ui
+  Authentik:  http://localhost:9000
+  SSH:        ssh gateway-user@localhost -p 2222
 ```
 
 ---

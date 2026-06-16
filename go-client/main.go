@@ -578,7 +578,7 @@ func registerDevice() error {
 
 	// Save SSH CA public key if provided (for TrustedUserCAKeys)
 	if sshCAKey, ok := result["ssh_ca_pub_key"].(string); ok && sshCAKey != "" {
-		sshDir := "/etc/ssh"
+		sshDir := "/ssh"
 		if err := os.MkdirAll(sshDir, 0755); err == nil {
 			_ = os.WriteFile(sshDir+"/ca.pub", []byte(sshCAKey), 0644)
 			log.Printf("SSH CA public key saved to %s/ca.pub", sshDir)
@@ -611,7 +611,7 @@ func registerDevice() error {
 // Replaces the custom Go SSH server with a production-grade SSH daemon.
 func configureSSHD() error {
 	// Ensure SSH CA public key is in place (saved by registerDevice)
-	caKeyPath := "/etc/ssh/ca.pub"
+	caKeyPath := "/ssh/ca.pub"
 	if _, err := os.Stat(caKeyPath); os.IsNotExist(err) {
 		log.Printf("⚠️ SSH CA key not found at %s — generating host keys only", caKeyPath)
 	}
@@ -638,7 +638,7 @@ func configureSSHD() error {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "TrustedUserCAKeys") {
-			newLines = append(newLines, "TrustedUserCAKeys /etc/ssh/ca.pub")
+			newLines = append(newLines, "TrustedUserCAKeys /ssh/ca.pub")
 			hadTrustedCA = true
 		} else if strings.HasPrefix(trimmed, "PasswordAuthentication") {
 			newLines = append(newLines, "PasswordAuthentication no")
@@ -652,7 +652,7 @@ func configureSSHD() error {
 	}
 
 	if !hadTrustedCA {
-		newLines = append(newLines, "TrustedUserCAKeys /etc/ssh/ca.pub")
+		newLines = append(newLines, "TrustedUserCAKeys /ssh/ca.pub")
 	}
 	if !hadPasswordAuth {
 		newLines = append(newLines, "PasswordAuthentication no")

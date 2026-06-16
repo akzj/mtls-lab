@@ -59,14 +59,15 @@ echo ""
 
 # Step 4: SSH login attempt with signed cert
 echo "--- Step 4: SSH login with signed certificate ---"
-echo "  Attempting ssh ssh-user@localhost -p 2222 ..."
+echo "  Attempting ssh ssh-user@vault.lab.local -p 2222 ..."
 if ssh -o StrictHostKeyChecking=no \
        -o UserKnownHostsFile=/dev/null \
        -o LogLevel=ERROR \
        -i "$TEMP_DIR/id_rsa" \
-       ssh-user@localhost -p 2222 \
+       ssh-user@vault.lab.local -p 2222 \
        "echo '  ✅ SSH LOGIN SUCCESSFUL with signed certificate!'; hostname; id"; then
     echo "  ✅ Certificate-based SSH login works!"
+    echo "  (Fallback without DNS: ssh ssh-user@localhost -p 2222)"
 else
     echo "  ❌ SSH login failed. Check configuration."
     exit 1

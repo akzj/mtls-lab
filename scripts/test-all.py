@@ -254,6 +254,29 @@ def test_vault():
             tests.append(("PKI roles listable", False))
     except requests.RequestException:
         tests.append(("PKI roles listable", False))
+    # --- Vault cert auth (go-server certificate login) ---
+    try:
+        r = subprocess.run(
+            [
+                "docker", "exec", "-e", "VAULT_CLIENT_CERT=/certs/vault-client.crt",
+                "-e", "VAULT_CLIENT_KEY=/certs/vault-client-key.pem",
+                "vault", "vault", "login",
+                "-tls-skip-verify", "-method=cert", "name=go-server",
+                "-format=json",
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0:
+            data = json.loads(r.stdout)
+            has_token = "client_token" in data.get("auth", {})
+            tests.append(("Vault cert auth: go-server login returns token", has_token))
+            policies = data.get("auth", {}).get("policies", [])
+            tests.append(("Vault cert auth: has server-policy", "server-policy" in policies))
+        else:
+            tests.append(("Vault cert auth: go-server login", False))
+    except Exception:
+        tests.append(("Vault cert auth: go-server login", False))
+
 
     return tests
 
@@ -371,6 +394,81 @@ def test_web_ui():
     except requests.RequestException:
         tests.append(("Web UI: /api/devices endpoint", False))
 
+    # --- go-server has valid Vault token + SSH CA keys ---
+    try:
+        r = subprocess.run(
+            "docker logs go-server 2>&1", capture_output=True, text=True, timeout=5, shell=True,
+        )
+        logs = r.stdout + r.stderr
+        has_cert_login = "mTLS cert login successful (CN=go-server)" in logs
+        has_dc1_ca = "DC1 CA: true" in logs
+        has_dc2_ca = "DC2 CA: true" in logs
+        tests.append(("go-server: mTLS cert login successful", has_cert_login))
+        tests.append(("go-server: DC1 SSH CA key loaded", has_dc1_ca))
+        tests.append(("go-server: DC2 SSH CA key loaded", has_dc2_ca))
+    except Exception:
+        tests.append(("go-server: mTLS cert login successful", False))
+        tests.append(("go-server: DC1 SSH CA key loaded", False))
+        tests.append(("go-server: DC2 SSH CA key loaded", False))
+
+    # --- OIDC plumbing: login redirect and callback ---
+    # Verify /auth/login redirects to Authentik
+    try:
+        r = requests.get(f"{base}/auth/login", timeout=REQ_TIMEOUT, allow_redirects=False)
+        is_302 = r.status_code == 302
+        has_auth_location = "auth.lab.local" in r.headers.get("Location", "")
+        has_client_id = "go-server-client-id" in r.headers.get("Location", "")
+        tests.append(("OIDC: /auth/login redirects (302)", is_302))
+        tests.append(("OIDC: redirect target is Authentik", has_auth_location and has_client_id))
+    except requests.RequestException:
+        tests.append(("OIDC: /auth/login redirects (302)", False))
+        tests.append(("OIDC: redirect target is Authentik", False))
+
+    # Verify /auth/callback handles bad code gracefully (no crash)
+    try:
+        r = requests.get(f"{base}/auth/callback?code=bad-test-code", timeout=REQ_TIMEOUT)
+        # Should return 500 (token exchange fails) but NOT crash the server
+        tests.append(("OIDC: /auth/callback handles invalid code", r.status_code == 500))
+    except requests.RequestException:
+        tests.append(("OIDC: /auth/callback handles invalid code", False))
+
+    # Verify tunnel creation returns 403 without auth (RBAC enforcement)
+    try:
+        r = requests.post(
+            f"{base}/api/tunnel",
+            json={"target_host": "internal-app", "target_port": 80},
+            timeout=REQ_TIMEOUT,
+        )
+        is_403 = r.status_code == 403
+        has_forbidden_msg = "forbidden" in r.text.lower()
+        tests.append(("RBAC: tunnel creation returns 403 without auth", is_403 and has_forbidden_msg))
+    except requests.RequestException:
+        tests.append(("RBAC: tunnel creation returns 403 without auth", False))
+
+    # Verify tunnel creation rejects fake session cookie
+    try:
+        r = requests.post(
+            f"{base}/api/tunnel",
+            json={"target_host": "internal-app", "target_port": 80},
+            cookies={"session_id": "fake-invalid-session-id"},
+            timeout=REQ_TIMEOUT,
+        )
+        is_403 = r.status_code == 403
+        tests.append(("RBAC: tunnel creation returns 403 with fake session", is_403))
+    except requests.RequestException:
+        tests.append(("RBAC: tunnel creation returns 403 with fake session", False))
+
+    # Verify go-server OIDC provider initialized
+    try:
+        r = subprocess.run(
+            "docker logs go-server 2>&1", capture_output=True, text=True, timeout=5, shell=True,
+        )
+        logs = r.stdout + r.stderr
+        oidc_init = "OIDC provider initialized" in logs or "OIDC init: discovery OK" in logs
+        tests.append(("OIDC: go-server provider initialized", oidc_init))
+    except Exception:
+        tests.append(("OIDC: go-server provider initialized", False))
+
     return tests
 
 
@@ -436,6 +534,71 @@ def test_ssh_ca():
                       r.returncode == 0 and "total " in r.stdout))
     except Exception:
         tests.append(("go-client: /app/certs/ directory accessible", False))
+
+    # --- SSH sign + login to gateway (Vault SSH CA end-to-end) ---
+    import tempfile
+    try:
+        tmpdir = tempfile.mkdtemp()
+        privkey_path = os.path.join(tmpdir, "test-key")
+        pubkey_path = privkey_path + ".pub"
+
+        # Generate temp SSH key pair
+        r = subprocess.run(
+            ["ssh-keygen", "-t", "rsa", "-b", "2048", "-f", privkey_path, "-N", "", "-q"],
+            capture_output=True, text=True, timeout=10,
+        )
+        keypair_ok = r.returncode == 0
+
+        if keypair_ok:
+            # Read the public key
+            with open(pubkey_path) as f:
+                pubkey_content = f.read().strip()
+
+            # Sign with Vault SSH CA — pass public_key as a string value, not file reference
+            sign_result = subprocess.run(
+                [
+                    "docker", "exec", "-i", "vault", "vault", "write",
+                    "-tls-skip-verify", "-format=json",
+                    "ssh/sign/sign-ssh",
+                    f"public_key={pubkey_content}",
+                    "valid_principals=gateway-user",
+                    "ttl=4m",
+                ],
+                capture_output=True, text=True, timeout=15,
+            )
+
+            if sign_result.returncode == 0:
+                signed_data = json.loads(sign_result.stdout)
+                signed_key = signed_data.get("data", {}).get("signed_key", "")
+                cert_path = os.path.join(tmpdir, "test-key-cert.pub")
+                with open(cert_path, "w") as f:
+                    f.write(signed_key)
+
+                # SSH to gateway with signed key
+                ssh_result = subprocess.run(
+                    [
+                        "ssh", "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=/dev/null",
+                        "-i", privkey_path,
+                        "-p", "2222",
+                        "gateway-user@vault.lab.local",
+                        "hostname; echo Connected",
+                    ],
+                    capture_output=True, text=True, timeout=10,
+                )
+                login_ok = ssh_result.returncode == 0 and "Connected" in ssh_result.stdout
+                tests.append(("SSH sign + login to gateway (DC1)", login_ok))
+            else:
+                tests.append(("SSH sign + login to gateway (DC1)", False))
+        else:
+            tests.append(("SSH sign + login to gateway (DC1)", False))
+    except Exception:
+        tests.append(("SSH sign + login to gateway (DC1)", False))
+    finally:
+        # Cleanup
+        import shutil
+        if 'tmpdir' in dir() and tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     return tests
 

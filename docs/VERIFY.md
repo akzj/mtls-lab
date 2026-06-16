@@ -3,6 +3,11 @@
 ## Prerequisites
 
 - Docker stack deployed: `docker compose up -d` (from project root)
+
+> **DNS Prerequisite**: All services use `*.lab.local` domain names via CoreDNS on port 5354.
+> Ensure DNS is configured (`/etc/resolver/lab.local` → `127.0.0.1:5354`) or add entries to `/etc/hosts`.
+> Commands below use domain names as primary; localhost fallbacks are noted where applicable.
+
 - All services running or completed (see `docker compose ps`)
 
 ---
@@ -96,9 +101,16 @@ Expected output:
   oidc auth
 
 === Initialization Complete ===
-Vault UI:     https://localhost:8200/ui (OIDC: admin/123123)
-Authentik:    http://localhost:9000 (admin/123123)
-SSH Gateway:  ssh gateway-user@localhost -p 2222
+Vault UI:     https://vault.lab.local:8200/ui (OIDC: admin/123123)
+Authentik:    http://auth.lab.local:9000 (admin/123123)
+Web UI:       http://web.lab.local:9091
+SSH Gateway:  ssh gateway-user@vault.lab.local -p 2222
+SSH Gateway DC2: ssh gateway-user@vault.lab.local -p 2223
+
+Localhost fallback (no DNS):
+  Vault UI:   https://localhost:8200/ui
+  Authentik:  http://localhost:9000
+  SSH:        ssh gateway-user@localhost -p 2222
 ```
 
 ### Verify KV secrets
@@ -216,7 +228,8 @@ docker compose exec nginx netstat -tlnp 2>/dev/null || docker compose exec nginx
 ### Verify Authentik UI
 
 ```bash
-# Open http://localhost:9000 in a browser
+# Open http://auth.lab.local:9000 in a browser
+# Fallback (no DNS): http://localhost:9000
 # Login with: admin / 123123
 ```
 
@@ -225,7 +238,8 @@ Expected: Authentik admin dashboard loads.
 ### Verify Vault OIDC Login
 
 ```bash
-# Open https://localhost:8200/ui in a browser
+# Open https://vault.lab.local:8200/ui in a browser
+# Fallback (no DNS): https://localhost:8200/ui
 # Click "OIDC" login button
 # Login with: admin / 123123
 ```
@@ -341,10 +355,15 @@ cat /tmp/test-ssh-key.pub | docker compose exec -T vault sh -c \
   "VAULT_ADDR=http://vault:8200 VAULT_TOKEN=root-token vault write -field=signed_key \
   ssh/sign/sign-ssh public_key=- valid_principals=gateway-user" > /tmp/test-ssh-key-cert.pub
 
-# SSH to gateway
+# SSH to gateway via domain name (requires DNS)
 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-  -i /tmp/test-ssh-key gateway-user@localhost -p 2222 \
+  -i /tmp/test-ssh-key gateway-user@vault.lab.local -p 2222 \
   "echo 'SSH via signed cert works!'; hostname"
+
+# Fallback (no DNS):
+# ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+#   -i /tmp/test-ssh-key gateway-user@localhost -p 2222 \
+#   "echo 'SSH via signed cert works!'; hostname"
 ```
 
 Expected: Connection succeeds and shows gateway hostname.
@@ -527,20 +546,22 @@ depth=2: CN = Zero-FAS Root CA
 If you want to test the mTLS connection manually from your host machine:
 
 ```bash
-# Add nginx to /etc/hosts if needed
-echo "127.0.0.1 nginx" | sudo tee -a /etc/hosts
-
-# Test TLS handshake with client cert
-openssl s_client -connect nginx:443 \
+# Test TLS handshake with client cert via nginx.lab.local (requires DNS)
+openssl s_client -connect nginx.lab.local:443 \
   -cert certs/client.crt \
   -key certs/client-key.pem \
   -CAfile certs/ca-chain.crt \
   -verify_return_error \
   -tlsextdebug \
   -status
+
+# Fallback (no DNS):
+# echo "127.0.0.1 nginx" | sudo tee -a /etc/hosts
+# openssl s_client -connect nginx:443 ...
 ```
 
 Expected output includes:
+```
 ```
 SSL handshake has read ... bytes and written ... bytes
 Verification: OK
@@ -549,11 +570,15 @@ Verification: OK
 To test WebSocket manually (using `websocat` or similar):
 
 ```bash
-websocat wss://nginx:443/ws \
+# Via domain name (requires DNS)
+websocat wss://nginx.lab.local:443/ws \
   --cert certs/client.crt \
   --key certs/client-key.pem \
   --ca-file certs/ca-chain.crt \
   -v
+
+# Fallback:
+# websocat wss://nginx:443/ws --cert ... --key ... --ca-file ...
 ```
 
 Type a message and press Enter — you should see the echoed response.
@@ -626,8 +651,8 @@ docker ps -a | grep vault
 | 12 | WebSocket echo | `logs go-client` | WS echo responses |
 | 13 | OIDC auth enabled | `vault auth list` | oidc/ present |
 | 14 | OIDC roles exist | `vault list auth/oidc/roles` | admin, ops, dev |
-| 15 | Authentik UI | `http://localhost:9000` | Login page loads |
-| 16 | Vault OIDC login | Browser at `:8200/ui` | Login with admin/123123 |
+| 15 | Authentik UI | `http://auth.lab.local:9000` | Login page loads |
+| 16 | Vault OIDC login | `https://vault.lab.local:8200/ui` | Login with admin/123123 |
 | 17 | SSH CA configured | `vault read ssh/config/ca` | public_key present |
 | 18 | SSH CA (DC2) | `vault read ssh-dc2/config/ca` | Different public_key |
 | 19 | SSH demo | `bash scripts/ssh-demo.sh` | SSH login successful |

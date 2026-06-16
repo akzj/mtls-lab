@@ -19,7 +19,10 @@ Outputs:
 Requires:
     - YubiKey inserted with Root CA key in PIV slot 9C (PKCS#11 ID 0x02)
     - Root CA certificate at certs/root-ca.crt
-    - pkcs11-tool from OpenSC
+    - pkcs11-tool from OpenSC (or use --software-sign with root-ca-key.pem)
+
+Optional:
+    - --software-sign: sign with software root CA key instead of YubiKey
 """
 
 import argparse
@@ -50,6 +53,8 @@ def parse_args():
                         help="PKCS#11 module path")
     parser.add_argument("--key-id", default="02", help="PKCS#11 key ID for signing")
     parser.add_argument("--pin", default="123123", help="YubiKey PIN")
+    parser.add_argument("--software-sign", default=None,
+                        help="Path to Root CA private key PEM for software signing (skip YubiKey)")
     return parser.parse_args()
 
 
@@ -418,11 +423,53 @@ def main():
     print(f"  TBS: {len(tbs_der)} bytes")
 
     # Verify TBS parses
-    print(f"\n[5/6] Signing with YubiKey...")
+    print(f"\n[5/6] Signing...")
 
-    # Sign with YubiKey
-    signature = pkcs11_sign(tbs_der, args.pkcs11_module, args.key_id, args.pin)
-    print(f"  Signed with YubiKey key ID {args.key_id}")
+    if args.software_sign:
+        # Software signing with root CA key backup
+        print(f"  Using software key: {args.software_sign}")
+        if not os.path.exists(args.software_sign):
+            print(f"  ❌ Root CA key not found: {args.software_sign}")
+            return 1
+        result = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-sign", args.software_sign,
+             "-keyform", "PEM", "-out", "/tmp/intermediate-sig.bin",
+             "/tmp/intermediate-tbs.der"],
+            capture_output=True, text=True
+        )
+            # Save TBS first (for openssl dgst -sign)
+        with open("/tmp/intermediate-tbs.der", "wb") as f:
+            f.write(tbs_der)
+        result = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-sign", args.software_sign,
+             "-keyform", "PEM"],
+            input=tbs_der,
+            capture_output=True, timeout=10
+        )
+        if result.returncode != 0:
+            print(f"  ❌ Software signing failed: {result.stderr}")
+            return 1
+        signature = result.stdout
+        print(f"  Signed with software key (SHA256-RSA)")
+    else:
+        # YubiKey signing
+        # Check if pkcs11-tool is available
+        try:
+            subprocess.run(["which", "pkcs11-tool"], capture_output=True, check=True)
+        except subprocess.CalledProcessError:
+            print("  ⚠️  pkcs11-tool not found!")
+            print("  ℹ️  To sign with software key, re-run with: --software-sign root-ca/root-ca-key.pem")
+            print("  ℹ️  Or install OpenSC: brew install opensc")
+            return 1
+
+        # Check if pkcs11 module exists
+        if not os.path.exists(args.pkcs11_module):
+            print(f"  ⚠️  PKCS#11 module not found: {args.pkcs11_module}")
+            print(f"  ℹ️  To sign with software key, re-run with: --software-sign root-ca/root-ca-key.pem")
+            return 1
+
+        signature = pkcs11_sign(tbs_der, args.pkcs11_module, args.key_id, args.pin)
+        print(f"  Signed with YubiKey key ID {args.key_id}")
 
     # Assemble final certificate
     cert_der = assemble_certificate(tbs_der, signature)
