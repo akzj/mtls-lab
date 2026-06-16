@@ -510,6 +510,12 @@ func main() {
 	// Route: Device list API
 	httpMux.HandleFunc("/api/devices", devicesHandler)
 
+	// Cert: issue (httpMux, requires OIDC session or mTLS)
+	httpMux.HandleFunc("/api/cert/issue", certIssueHandler)
+
+	// Cert: renew (mtlsMux, requires mTLS client cert)
+	mtlsMux.HandleFunc("/api/cert/renew", certRenewHandler)
+
 	// Start mTLS server on :9090 (existing behavior)
 	mtlsServer := &http.Server{
 		Addr:      ":9090",
@@ -1010,6 +1016,358 @@ func whoamiHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // registerHandler handles POST /api/register (mTLS required)
+// ===== Certificate Self-Service =====
+
+// groupToPolicy maps OIDC groups to Vault policies (for cert auth role binding)
+var groupToPolicy = map[string]string{
+	"admin-group": "admin-policy",
+	"ops-group":   "ops-policy",
+	"dev-group":   "dev-policy",
+}
+
+// certIssueHandler handles POST /api/cert/issue — issues a personal certificate via Vault PKI
+// Auth: OIDC session cookie OR mTLS client cert
+// Flow: getUserIdentity -> Vault PKI issue -> create/update cert auth role -> return cert
+func certIssueHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 1. Authenticate — get user identity
+	var username string
+	var groups []string
+
+	// Check mTLS cert first (X-Forwarded-Ssl-Client-DN from nginx)
+	clientDN := r.Header.Get("X-Forwarded-Ssl-Client-DN")
+	if clientDN != "" {
+		if idx := strings.Index(clientDN, "CN="); idx >= 0 {
+			cnPart := clientDN[idx+3:]
+			if end := strings.IndexAny(cnPart, ",;"); end >= 0 {
+				cnPart = strings.TrimSpace(cnPart[:end])
+			} else {
+				cnPart = strings.TrimSpace(cnPart)
+			}
+			if cnPart != "" {
+				identity := resolveIdentityFromCertCN(cnPart)
+				username = identity.Username
+				groups = identity.Groups
+			}
+		}
+	}
+
+	// Fall back to OIDC session cookie
+	if username == "" {
+		cookie, err := r.Cookie("session_id")
+		if err == nil && sessionStore.IsValid(cookie.Value) {
+			username = sessionStore.GetUser(cookie.Value)
+			groups = sessionStore.GetGroups(cookie.Value)
+		}
+	}
+
+	if username == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"unauthorized","message":"Login required"}`))
+		return
+	}
+
+	log.Printf("[cert] Issue request for user=%s groups=%v", username, groups)
+
+	// 2. Build CN = username@lab.local
+	commonName := username + "@lab.local"
+	ttl := "720h" // 30 days
+
+	// 3. Call Vault PKI to issue certificate
+	token := getVaultToken()
+	if token == "" {
+		log.Printf("[cert] No Vault token available")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"vault_unavailable","message":"Vault token not available"}`))
+		return
+	}
+
+	vaultAddr := os.Getenv("VAULT_ADDR")
+	if vaultAddr == "" {
+		vaultAddr = "https://vault:8200"
+	}
+
+	// Prepare request body for Vault PKI
+	issueReq := map[string]interface{}{
+		"common_name":       commonName,
+		"alt_names":         "",
+		"ttl":               ttl,
+		"format":            "pem",
+		"private_key_format": "pem",
+		"key_type":          "rsa",
+		"key_bits":          2048,
+	}
+	issueBody, _ := json.Marshal(issueReq)
+
+	req, err := http.NewRequest("POST", vaultAddr+"/v1/pki/issue/user", bytes.NewReader(issueBody))
+	if err != nil {
+		log.Printf("[cert] Failed to create request: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"internal"}`))
+		return
+	}
+	req.Header.Set("X-Vault-Token", token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := vaultHTTPClient.Do(req)
+	if err != nil {
+		log.Printf("[cert] Vault PKI issue failed: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(`{"error":"vault_error","message":"Failed to issue certificate from Vault"}`))
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var vaultResp map[string]interface{}
+	json.Unmarshal(body, &vaultResp)
+
+	if resp.StatusCode != 200 {
+		log.Printf("[cert] Vault PKI error: %s", string(body))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(fmt.Sprintf(`{"error":"vault_error","detail":%s}`, string(body))))
+		return
+	}
+
+	data, ok := vaultResp["data"].(map[string]interface{})
+	if !ok {
+		log.Printf("[cert] Unexpected Vault response format")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"vault_response_error"}`))
+		return
+	}
+
+	// 4. Create/update Vault cert auth role for this user
+	// Determine which Vault policy to assign based on user groups
+	vaultPolicies := getVaultPoliciesForGroups(groups)
+	if err := ensureCertAuthRole(username, commonName, vaultPolicies); err != nil {
+		log.Printf("[cert] Warning: failed to update cert auth role: %v", err)
+		// Non-fatal — user can still download cert
+	}
+
+	// 5. Build response
+	response := map[string]interface{}{
+		"certificate":   data["certificate"],
+		"private_key":   data["private_key"],
+		"issuing_ca":    data["issuing_ca"],
+		"ca_chain":      data["ca_chain"],
+		"serial_number": data["serial_number"],
+		"expiration":    data["expiration"],
+		"common_name":   commonName,
+		"username":      username,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+	log.Printf("[cert] Issued cert for %s (CN=%s)", username, commonName)
+}
+
+// getVaultPoliciesForGroups maps user RBAC groups to Vault policies
+func getVaultPoliciesForGroups(groups []string) []string {
+	policies := []string{}
+	seen := map[string]bool{}
+	for _, g := range groups {
+		if p, ok := groupToPolicy[g]; ok && !seen[p] {
+			policies = append(policies, p)
+			seen[p] = true
+		}
+	}
+	if len(policies) == 0 {
+		policies = append(policies, "dev-policy")
+	}
+	return policies
+}
+
+// ensureCertAuthRole creates or updates the Vault cert auth role for a user
+func ensureCertAuthRole(username, commonName string, policies []string) error {
+	token := getVaultToken()
+	if token == "" {
+		return fmt.Errorf("no vault token")
+	}
+
+	vaultAddr := os.Getenv("VAULT_ADDR")
+	if vaultAddr == "" {
+		vaultAddr = "https://vault:8200"
+	}
+
+	// First check if role exists
+	roleName := "personal-" + username
+	rolePath := "/v1/auth/cert/certs/" + roleName
+
+	// Read ca-chain.crt for the certificate field
+	caChain, err := os.ReadFile("certs/ca-chain.crt")
+	if err != nil {
+		// Fall back to all-chain.crt
+		caChain, err = os.ReadFile("certs/all-chain.crt")
+		if err != nil {
+			return fmt.Errorf("failed to read CA chain: %w", err)
+		}
+	}
+
+	roleReq := map[string]interface{}{
+		"certificate":           string(caChain),
+		"allowed_common_names": []string{commonName},
+		"token_policies":        policies,
+		"token_ttl":             "86400",
+		"token_type":            "service",
+	}
+	roleBody, _ := json.Marshal(roleReq)
+
+	req, err := http.NewRequest("POST", vaultAddr+rolePath, bytes.NewReader(roleBody))
+	if err != nil {
+		return fmt.Errorf("failed to create role request: %w", err)
+	}
+	req.Header.Set("X-Vault-Token", token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := vaultHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to write cert auth role: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 && resp.StatusCode != 204 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("vault returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	log.Printf("[cert] Cert auth role '%s' updated for CN=%s policies=%v", roleName, commonName, policies)
+	return nil
+}
+
+// certRenewHandler handles POST /api/cert/renew — renews a certificate via mTLS auth
+// Auth: mTLS client cert (verified by nginx/go-server)
+// Flow: extract CN from mTLS cert -> re-issue via Vault PKI -> return new cert
+func certRenewHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract CN from mTLS cert
+	var commonName string
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		commonName = r.TLS.PeerCertificates[0].Subject.CommonName
+	} else {
+		// Also check header (nginx proxy path)
+		clientDN := r.Header.Get("X-Forwarded-Ssl-Client-DN")
+		if clientDN != "" {
+			if idx := strings.Index(clientDN, "CN="); idx >= 0 {
+				cnPart := clientDN[idx+3:]
+				if end := strings.IndexAny(cnPart, ",;"); end >= 0 {
+					commonName = strings.TrimSpace(cnPart[:end])
+				} else {
+					commonName = strings.TrimSpace(cnPart)
+				}
+			}
+		}
+	}
+
+	if commonName == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"unauthorized","message":"Client certificate required"}`))
+		return
+	}
+
+	log.Printf("[cert] Renew request for CN=%s", commonName)
+
+	// Call Vault PKI to re-issue
+	token := getVaultToken()
+	if token == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":"vault_unavailable"}`))
+		return
+	}
+
+	vaultAddr := os.Getenv("VAULT_ADDR")
+	if vaultAddr == "" {
+		vaultAddr = "https://vault:8200"
+	}
+
+	ttl := "2160h" // 90 days for renewal (longer than initial issue)
+
+	// Check if old cert is about to expire — if so use shorter TTL
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		timeLeft := time.Until(r.TLS.PeerCertificates[0].NotAfter)
+		if timeLeft < 24*time.Hour {
+			ttl = "720h" // 30 days if expiring soon
+		}
+	}
+
+	issueReq := map[string]interface{}{
+		"common_name": commonName,
+		"ttl":         ttl,
+		"key_type":    "rsa",
+		"key_bits":    2048,
+	}
+	issueBody, _ := json.Marshal(issueReq)
+
+	req, err := http.NewRequest("POST", vaultAddr+"/v1/pki/issue/user", bytes.NewReader(issueBody))
+	if err != nil {
+		log.Printf("[cert] Renew: request error: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"internal"}`))
+		return
+	}
+	req.Header.Set("X-Vault-Token", token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := vaultHTTPClient.Do(req)
+	if err != nil {
+		log.Printf("[cert] Renew: Vault error: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(`{"error":"vault_error"}`))
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var vaultResp map[string]interface{}
+	json.Unmarshal(body, &vaultResp)
+
+	if resp.StatusCode != 200 {
+		log.Printf("[cert] Renew: Vault PKI error: %s", string(body))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(fmt.Sprintf(`{"error":"vault_error","detail":%s}`, string(body))))
+		return
+	}
+
+	data, ok := vaultResp["data"].(map[string]interface{})
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"vault_response_error"}`))
+		return
+	}
+
+	response := map[string]interface{}{
+		"certificate":   data["certificate"],
+		"issuing_ca":    data["issuing_ca"],
+		"ca_chain":      data["ca_chain"],
+		"serial_number": data["serial_number"],
+		"expiration":    data["expiration"],
+		"common_name":   commonName,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+	log.Printf("[cert] Renewed cert for CN=%s (expires in %s)", commonName, ttl)
+}
 func registerHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

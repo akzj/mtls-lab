@@ -14,6 +14,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 import requests
@@ -696,8 +697,110 @@ def report(category, results):
         else:
             print(f"  [FAIL] {desc}")
             FAIL += 1
+# ---------------------------------------------------------------------------
+# 10. Certificate Self-Service Test
+# ---------------------------------------------------------------------------
+def test_cert_self_service():
+    """Test /api/cert/issue, /api/cert/renew, identity binding, mTLS verification."""
+    tests = []
+    tmpdir = tempfile.mkdtemp()
+    cert_path = os.path.join(tmpdir, "issued.crt")
+    key_path = os.path.join(tmpdir, "issued-key.pem")
+
+    try:
+        # Test 1: Cert issue via mTLS header (simulating nginx proxy)
+        result = subprocess.run([
+            "curl", "-s", "-X", "POST",
+            "http://localhost:9091/api/cert/issue",
+            "-H", "X-Forwarded-Ssl-Client-DN: CN=admin@lab.local",
+            "-H", "Content-Type: application/json",
+            "-d", "{}"
+        ], capture_output=True, text=True, timeout=REQ_TIMEOUT)
+
+        data = json.loads(result.stdout) if result.stdout else {}
+        tests.append(("cert issue (mTLS header): HTTP 200", result.returncode == 0 and "common_name" in data))
+        tests.append(("cert issue: common_name=admin@lab.local", data.get("common_name") == "admin@lab.local"))
+        tests.append(("cert issue: username=admin", data.get("username") == "admin"))
+        tests.append(("cert issue: has certificate PEM", bool(data.get("certificate"))))
+        tests.append(("cert issue: has private_key PEM", bool(data.get("private_key"))))
+
+        # Save cert for mTLS tests
+        if data.get("certificate") and data.get("private_key"):
+            with open(cert_path, "w") as f:
+                f.write(data["certificate"])
+            with open(key_path, "w") as f:
+                f.write(data["private_key"])
+            os.chmod(key_path, 0o600)
+
+        # Test 2: Cert issue without auth → 401
+        result_noauth = subprocess.run([
+            "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+            "-X", "POST", "http://localhost:9091/api/cert/issue",
+            "-H", "Content-Type: application/json", "-d", "{}"
+        ], capture_output=True, text=True, timeout=REQ_TIMEOUT)
+        tests.append(("cert issue (no auth): 401", result_noauth.stdout.strip() == "401"))
+
+        # Test 3: Vault cert auth role created
+        role_result = subprocess.run([
+            "docker", "compose", "exec", "vault",
+            "sh", "-c", "VAULT_SKIP_VERIFY=true VAULT_TOKEN=root-token vault read -format=json auth/cert/certs/personal-admin"
+        ], capture_output=True, text=True, timeout=10)
+
+        if role_result.returncode == 0 and role_result.stdout:
+            role_data = json.loads(role_result.stdout).get("data", {})
+            allowed = role_data.get("allowed_common_names", [])
+            policies = role_data.get("token_policies", [])
+            tests.append(("Vault role personal-admin: allowed_common_names", "admin@lab.local" in allowed))
+            tests.append(("Vault role personal-admin: token_policies", "admin-policy" in policies))
+        else:
+            tests.append(("Vault role personal-admin: created", False))
+
+        # Test 4: Issued cert works for mTLS → /api/whoami
+        if os.path.exists(cert_path) and os.path.exists(key_path):
+            whoami_result = subprocess.run([
+                "curl", "-sk", "--cert", cert_path, "--key", key_path,
+                "--resolve", "go-server:9090:127.0.0.1",
+                "https://go-server:9090/api/whoami"
+            ], capture_output=True, text=True, timeout=REQ_TIMEOUT)
+
+            if whoami_result.returncode == 0 and whoami_result.stdout:
+                whoami_data = json.loads(whoami_result.stdout)
+                tests.append(("issued cert → whoami: cn=admin@lab.local",
+                              whoami_data.get("cn") == "admin@lab.local"))
+                tests.append(("issued cert → whoami: resolved_name=admin",
+                              whoami_data.get("resolved_name") == "admin"))
+                tests.append(("issued cert → whoami: group admin-group",
+                              "admin-group" in whoami_data.get("groups", [])))
+            else:
+                tests.append(("issued cert → whoami: HTTP fail", False))
+
+        # Test 5: Cert renew via mTLS
+        if os.path.exists(cert_path) and os.path.exists(key_path):
+            renew_result = subprocess.run([
+                "curl", "-sk", "-X", "POST",
+                "--cert", cert_path, "--key", key_path,
+                "--resolve", "go-server:9090:127.0.0.1",
+                "https://go-server:9090/api/cert/renew"
+            ], capture_output=True, text=True, timeout=REQ_TIMEOUT)
+
+            if renew_result.returncode == 0 and renew_result.stdout:
+                renew_data = json.loads(renew_result.stdout)
+                tests.append(("cert renew: common_name=admin@lab.local",
+                              renew_data.get("common_name") == "admin@lab.local"))
+                tests.append(("cert renew: has certificate", bool(renew_data.get("certificate"))))
+            else:
+                tests.append(("cert renew: HTTP fail", False))
+
+    except Exception as e:
+        tests.append((f"cert self-service error: {e}", False))
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return tests
 
 
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # mTLS Identity Test
@@ -753,6 +856,7 @@ def main():
     report("7. step-ca ACME", test_step_ca_acme())
     report("8. Network / DNS", test_network_dns())
     report("9. mTLS Identity", test_mtls_identity())
+    report("10. Certificate Self-Service", test_cert_self_service())
 
     total = PASS + FAIL
     print(f"\n{'=' * 60}")
