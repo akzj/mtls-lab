@@ -27,11 +27,18 @@ import (
 	_ "github.com/lib/pq"
 	"golang.org/x/oauth2"
 	"context"
+
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"encoding/base64"
 )
 
 //go:embed static/*
 var staticFS embed.FS
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
@@ -114,6 +121,28 @@ func initDB(dsn string) (*sql.DB, error) {
 	db.SetMaxIdleConns(5)
 	return db, nil
 }
+// runMigrations applies golang-migrate migrations embedded in the binary.
+// Uses postgres URL format for the migration DSN (different from lib/pq DSN format).
+func runMigrations(dbDsn string) error {
+	src, err := iofs.New(migrationsFS, "migrations")
+	if err != nil {
+		return fmt.Errorf("failed to create migration source: %w", err)
+	}
+
+	m, err := migrate.NewWithSourceInstance("iofs", src, dbDsn)
+	if err != nil {
+		return fmt.Errorf("failed to create migration instance: %w", err)
+	}
+	defer m.Close()
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+
+	log.Println("DB migrations applied successfully")
+	return nil
+}
+
 
 
 // ===== OIDC Authentication =====
@@ -410,6 +439,11 @@ func main() {
 		if err != nil {
 			log.Printf("WARNING: PostgreSQL unavailable — falling back to hardcoded permission maps: %v", err)
 		} else {
+			// Run golang-migrate migrations before initializing PermissionStore
+			migrateDsn := fmt.Sprintf("postgres://mtls:%s@mtls-db:5432/mtls?sslmode=disable", url.QueryEscape(config.DBPassword))
+			if err := runMigrations(migrateDsn); err != nil {
+				log.Printf("WARNING: DB migration failed (using existing tables): %v", err)
+			}
 			permStore = &PermissionStore{db: db}
 			log.Printf("PBAC: PostgreSQL connected, permission-based access control active")
 		}
