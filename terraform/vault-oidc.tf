@@ -37,8 +37,8 @@ resource "vault_jwt_auth_backend_role" "admin" {
   role_name             = "admin"
   bound_audiences       = ["vault-client-id"]
   allowed_redirect_uris = local.allowed_redirect_uris
-  user_claim            = "sub"
-  oidc_scopes           = ["openid"]
+  user_claim            = "preferred_username"
+  oidc_scopes           = ["openid", "profile"]
   token_policies        = ["admin-policy"]
   token_ttl             = 3600
 }
@@ -48,8 +48,8 @@ resource "vault_jwt_auth_backend_role" "ops" {
   role_name             = "ops"
   bound_audiences       = ["vault-client-id"]
   allowed_redirect_uris = local.allowed_redirect_uris
-  user_claim            = "sub"
-  oidc_scopes           = ["openid"]
+  user_claim            = "preferred_username"
+  oidc_scopes           = ["openid", "profile"]
   token_policies        = ["ops-policy"]
   token_ttl             = 3600
 }
@@ -59,8 +59,8 @@ resource "vault_jwt_auth_backend_role" "dev" {
   role_name             = "dev"
   bound_audiences       = ["vault-client-id"]
   allowed_redirect_uris = local.allowed_redirect_uris
-  user_claim            = "sub"
-  oidc_scopes           = ["openid"]
+  user_claim            = "preferred_username"
+  oidc_scopes           = ["openid", "profile"]
   token_policies        = ["dev-policy"]
   token_ttl             = 3600
 }
